@@ -1,4 +1,4 @@
-#include "mcp23018_matrix.h"
+#include "mcp23017_matrix.h"
 
 #include <string.h>
 
@@ -9,7 +9,7 @@ static uint16_t pin_mask(const uint8_t *pins, uint8_t n) {
 }
 
 const char *mx_validate(const mx_chip_cfg_t *chips, uint8_t n_chips, uint8_t n_rows, uint8_t n_cols) {
-    if (n_chips == 0 || n_chips > MX_MAX_CHIPS) return "chip count must be 1..8 (MCP23018 has 3 address pins): fix MX_NUM_CHIPS in matrix_config.h";
+    if (n_chips == 0 || n_chips > MX_MAX_CHIPS) return "chip count must be 1..8 (MCP23017 has 3 address pins): fix MX_NUM_CHIPS in matrix_config.h";
     if (n_rows == 0 || n_rows > MX_MAX_ROWS || n_cols == 0 || n_cols > 32) return "logical matrix must be 1..32 rows by 1..32 columns: fix MX_LOGICAL_ROWS/COLS in matrix_config.h";
     for (uint8_t i = 0; i < n_chips; i++) {
         const mx_chip_cfg_t *c = &chips[i];
@@ -19,8 +19,10 @@ const char *mx_validate(const mx_chip_cfg_t *chips, uint8_t n_chips, uint8_t n_r
         if (c->n_rows == 0 || c->n_cols == 0 || c->n_rows > MX_MAX_PINS || c->n_cols > MX_MAX_PINS) return "chip row/column count must be 1..16: fix its n_rows/n_cols";
         for (uint8_t k = 0; k < c->n_rows; k++)
             if (c->row_pins[k] >= MX_MAX_PINS) return "row pin number > 15 (0-7 = GPA, 8-15 = GPB): fix row_pins";
-        for (uint8_t k = 0; k < c->n_cols; k++)
+        for (uint8_t k = 0; k < c->n_cols; k++) {
             if (c->col_pins[k] >= MX_MAX_PINS) return "column pin number > 15 (0-7 = GPA, 8-15 = GPB): fix col_pins";
+            if (c->col_pins[k] == 7 || c->col_pins[k] == 15) return "column on GPA7 or GPB7: those MCP23017 pins are output-only, so move the column to another pin (rows may use them)";
+        }
         uint16_t rm = pin_mask(c->row_pins, c->n_rows), cm = pin_mask(c->col_pins, c->n_cols);
         if (__builtin_popcount(rm) != c->n_rows || __builtin_popcount(cm) != c->n_cols) return "a pin is listed twice in a chip's rows or columns: make each pin appear once";
         if (rm & cm) return "a pin is both a row and a column: assign it to one role";

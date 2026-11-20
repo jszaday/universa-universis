@@ -1,11 +1,11 @@
-// QMK custom-matrix glue (CUSTOM_MATRIX = lite): binds mcp23018_matrix.c to
+// QMK custom-matrix glue (CUSTOM_MATRIX = lite): binds mcp23017_matrix.c to
 // QMK's i2c_master. Not compiled in this repo (no QMK tree available when it
 // was written); it follows https://docs.qmk.fm/custom_matrix and the i2c_master
 // API as used by QMK drivers/gpio/mcp23018.c. Expect to fix small build errors.
 //
 // Keyboard integration (not shipped here):
 //   rules.mk:  CUSTOM_MATRIX = lite
-//              SRC += matrix.c mcp23018_matrix.c
+//              SRC += matrix.c mcp23017_matrix.c
 //              QUANTUM_LIB_SRC += i2c_master.c
 //   config.h:  #define MATRIX_ROWS 4 / MATRIX_COLS 10  (= MX_LOGICAL_ROWS/COLS)
 //              #define F_SCL 400000UL  (AVR; ARM/ChibiOS sets the bus speed in
@@ -48,7 +48,7 @@ void matrix_init_custom(void) {
     wait_ms(100); // let the extenders power up; QMK's driver waits 1000 ms once
     const mx_bus_t bus = {bus_write, bus_read, 0};
     mx_init(&mx, &bus, mx_chips, MX_NUM_CHIPS, MX_LOGICAL_ROWS, MX_LOGICAL_COLS);
-    dprintf("mcp23018: %u of %u chips up\n", mx_chips_up(&mx), MX_NUM_CHIPS);
+    dprintf("mcp23017: %u of %u chips up\n", mx_chips_up(&mx), MX_NUM_CHIPS);
 }
 
 bool matrix_scan_custom(matrix_row_t current_matrix[]) {

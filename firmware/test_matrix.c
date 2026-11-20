@@ -1,10 +1,10 @@
-// Host test for mcp23018_matrix.c with a fake MCP23018 (IOCON.BANK=0 register
+// Host test for mcp23017_matrix.c with a fake MCP23017 (IOCON.BANK=0 register
 // model, sequential addressing). Build and run: see Makefile (`make test`).
 #include <stdio.h>
 #include <string.h>
 
 #include "matrix_config.h"
-#include "mcp23018_matrix.h"
+#include "mcp23017_matrix.h"
 
 static int failures, checks;
 #define CHECK(cond, ...)                                  \
@@ -125,6 +125,14 @@ static void test_validate(void) {
     memcpy(bad, mx_chips, sizeof bad);
     bad[0].addr = 0x30;
     CHECK(mx_validate(bad, 2, MX_LOGICAL_ROWS, MX_LOGICAL_COLS) != 0, "address outside 0x20..0x27 must be rejected");
+    memcpy(bad, mx_chips, sizeof bad);
+    bad[0].col_pins[4] = 15; // GPB7 as a column: output-only pin
+    CHECK(mx_validate(bad, 2, MX_LOGICAL_ROWS, MX_LOGICAL_COLS) != 0, "column on GPB7 must be rejected");
+    bad[0].col_pins[4] = 7;  // GPA7
+    CHECK(mx_validate(bad, 2, MX_LOGICAL_ROWS, MX_LOGICAL_COLS) != 0, "column on GPA7 must be rejected");
+    memcpy(bad, mx_chips, sizeof bad);
+    bad[0].row_pins[3] = 7;  // GPA7 as a row is fine
+    CHECK(mx_validate(bad, 2, MX_LOGICAL_ROWS, MX_LOGICAL_COLS) == 0, "row on GPA7 must be accepted");
     CHECK(mx_validate(mx_chips, 2, 4, 9) != 0, "map entry outside logical size must be rejected");
 }
 

@@ -9,9 +9,9 @@ BUILD = build
 test: $(BUILD)/test_matrix
 	./$(BUILD)/test_matrix
 
-$(BUILD)/test_matrix: test_matrix.c mcp23018_matrix.c mcp23018_matrix.h matrix_config.h
+$(BUILD)/test_matrix: test_matrix.c mcp23017_matrix.c mcp23017_matrix.h matrix_config.h
 	mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) -I. test_matrix.c mcp23018_matrix.c -o $@
+	$(CC) $(CFLAGS) -I. test_matrix.c mcp23017_matrix.c -o $@
 
 mutants:
 	@mkdir -p $(BUILD)
@@ -22,10 +22,10 @@ mutants:
 	    iodir_reg) hdr=1; e='s/MX_REG_IODIRA = 0x00/MX_REG_IODIRA = 0x01/';; \
 	    rowcol_swap) hdr=0; e='s/c->map\[r \* c->n_cols + k\]/c->map[k * c->n_rows + r]/';; \
 	  esac; \
-	  mkdir -p $(BUILD)/$$m; cp mcp23018_matrix.h mcp23018_matrix.c matrix_config.h test_matrix.c $(BUILD)/$$m/; \
-	  if [ $$hdr = 1 ]; then sed -i.bak "$$e" $(BUILD)/$$m/mcp23018_matrix.h; else sed -i.bak "$$e" $(BUILD)/$$m/mcp23018_matrix.c; fi; \
-	  if cmp -s $(BUILD)/$$m/mcp23018_matrix.h mcp23018_matrix.h && cmp -s $(BUILD)/$$m/mcp23018_matrix.c mcp23018_matrix.c; then echo "mutant $$m: sed did not change the source"; exit 2; fi; \
-	  $(CC) $(CFLAGS) -I$(BUILD)/$$m $(BUILD)/$$m/test_matrix.c $(BUILD)/$$m/mcp23018_matrix.c -o $(BUILD)/$$m/t; \
+	  mkdir -p $(BUILD)/$$m; cp mcp23017_matrix.h mcp23017_matrix.c matrix_config.h test_matrix.c $(BUILD)/$$m/; \
+	  if [ $$hdr = 1 ]; then sed -i.bak "$$e" $(BUILD)/$$m/mcp23017_matrix.h; else sed -i.bak "$$e" $(BUILD)/$$m/mcp23017_matrix.c; fi; \
+	  if cmp -s $(BUILD)/$$m/mcp23017_matrix.h mcp23017_matrix.h && cmp -s $(BUILD)/$$m/mcp23017_matrix.c mcp23017_matrix.c; then echo "mutant $$m: sed did not change the source"; exit 2; fi; \
+	  $(CC) $(CFLAGS) -I$(BUILD)/$$m $(BUILD)/$$m/test_matrix.c $(BUILD)/$$m/mcp23017_matrix.c -o $(BUILD)/$$m/t; \
 	  if $(BUILD)/$$m/t > $(BUILD)/$$m/log 2>&1; then echo "mutant $$m: SURVIVED (test passed, bad)"; exit 1; else echo "mutant $$m: killed (test failed as it should)"; fi; \
 	done
 

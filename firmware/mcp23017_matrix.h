@@ -1,5 +1,12 @@
-// Pure, host-testable matrix scan logic for MCP23018-based breakaway pieces.
+// Pure, host-testable matrix scan logic for MCP23017-based breakaway pieces.
 // No QMK or hardware headers: the I2C bus is injected (see mx_bus_t).
+//
+// Row drive: MCP23017 outputs are push-pull. The active row is driven low and every
+// other row is driven HIGH (not switched to input). That is safe with COL2ROW
+// diodes: the diode cathode is on the row and the anode on the column, so a row at
+// VDD reverse-biases it and a column (weak pull-up to VDD) cannot be pulled low
+// by an unselected row. (A floating row would be equally safe; driving high keeps
+// rows from picking up noise.)
 //
 // Wiring model (locked design): each chip drives a purely local COL2ROW diode
 // matrix. Row pins are outputs, driven low one at a time; column pins are inputs
@@ -7,6 +14,8 @@
 // A chip may be absent: its keys read as released and the scan never blocks.
 //
 // Pin numbering used throughout: 0..7 = GPA0..GPA7, 8..15 = GPB0..GPB7.
+// GPA7 (7) and GPB7 (15) are output-only on the MCP23017 (datasheet rev D, features
+// list): they may be rows but never columns (mx_validate enforces this).
 #pragma once
 #include <stdbool.h>
 #include <stdint.h>
@@ -17,8 +26,9 @@
 #define MX_POS_NONE 0xFF // map entry with no key (unpopulated switch position)
 #define MX_RETRY_PERIOD 256 // scans between init retries of a down chip (uint8_t wrap)
 
-// MCP23018 registers, IOCON.BANK=0 (power-on default). Verified against QMK
-// drivers/gpio/mcp23018.c (see matrix_config.h header for provenance notes).
+// MCP23017 registers, IOCON.BANK=0 (power-on default). Each address confirmed in
+// MCP23017 datasheet DS20001952D Table 3-5; OLAT (0x14/0x15) is where GPIO writes
+// land. The MCP23018 (QMK drivers/gpio/mcp23018.c) uses the same addresses.
 enum {
     MX_REG_IODIRA = 0x00,
     MX_REG_IODIRB = 0x01,

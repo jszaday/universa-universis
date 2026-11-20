@@ -1,4 +1,4 @@
-// rev1 matrix layout, table-driven: one entry per MCP23018 chip.
+// rev1 matrix layout, table-driven: one entry per MCP23017 chip.
 //
 // *** PLACEHOLDER *** two invented chips so the scanner and tests have something
 // to run. The real per-piece table (addresses, row/column pins, mapping to the
@@ -9,13 +9,15 @@
 // map[] is row-major [chip row][chip column] -> logical {row, col}; use
 // MX_NONE for a position with no switch.
 //
-// Register facts (verified) come from QMK drivers/gpio/mcp23018.c: IODIRA 0x00,
-// IODIRB 0x01, GPPUA 0x0C, GPPUB 0x0D, GPIOA 0x12, GPIOB 0x13, 7-bit address
-// shifted left by one for i2c_master, 100 ms timeout. Not verified against the
-// datasheet: IOCON.BANK=0 being the power-on default (assumed; the code never
-// writes IOCON).
+// Register facts, confirmed in the MCP23017 datasheet DS20001952D (Table 3-5, BANK=0):
+// IODIRA 0x00, IODIRB 0x01, GPPUA 0x0C, GPPUB 0x0D, GPIOA 0x12, GPIOB 0x13, OLATA
+// 0x14, OLATB 0x15; IOCON (0x0A) resets to 0x00, so BANK=0 and SEQOP=0 (sequential)
+// are the power-on state and the code never writes IOCON. QMK's
+// drivers/gpio/mcp23018.c shows the same addresses, the 7-bit address shifted left
+// by one for i2c_master, and a 100 ms timeout (QMK facts, not datasheet).
+// GPA7 and GPB7 are output-only on the MCP23017: never use them as columns.
 #pragma once
-#include "mcp23018_matrix.h"
+#include "mcp23017_matrix.h"
 
 #define MX_LOGICAL_ROWS 4
 #define MX_LOGICAL_COLS 10
