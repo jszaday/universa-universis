@@ -7,7 +7,7 @@
 //   rules.mk:  CUSTOM_MATRIX = lite
 //              SRC += matrix.c mcp23017_matrix.c
 //              QUANTUM_LIB_SRC += i2c_master.c
-//   config.h:  #define MATRIX_ROWS 4 / MATRIX_COLS 10  (= MX_LOGICAL_ROWS/COLS)
+//   config.h:  #define MATRIX_ROWS 6 / MATRIX_COLS 21  (= MX_LOGICAL_ROWS/COLS)
 //              #define F_SCL 400000UL  (AVR; ARM/ChibiOS sets the bus speed in
 //              its I2C driver config instead, e.g. I2C1_OPMODE / timing values)
 //   The 400 kHz request is also made below, but F_SCL must be visible to

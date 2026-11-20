@@ -11,6 +11,8 @@ static uint16_t pin_mask(const uint8_t *pins, uint8_t n) {
 const char *mx_validate(const mx_chip_cfg_t *chips, uint8_t n_chips, uint8_t n_rows, uint8_t n_cols) {
     if (n_chips == 0 || n_chips > MX_MAX_CHIPS) return "chip count must be 1..8 (MCP23017 has 3 address pins): fix MX_NUM_CHIPS in matrix_config.h";
     if (n_rows == 0 || n_rows > MX_MAX_ROWS || n_cols == 0 || n_cols > 32) return "logical matrix must be 1..32 rows by 1..32 columns: fix MX_LOGICAL_ROWS/COLS in matrix_config.h";
+    uint8_t claimed[MX_MAX_ROWS * 32 / 8];
+    memset(claimed, 0, sizeof claimed);
     for (uint8_t i = 0; i < n_chips; i++) {
         const mx_chip_cfg_t *c = &chips[i];
         if (c->addr < 0x20 || c->addr > 0x27) return "chip address outside 0x20..0x27: use 0x20 | A2A1A0 for the chip's address pins";
@@ -23,28 +25,42 @@ const char *mx_validate(const mx_chip_cfg_t *chips, uint8_t n_chips, uint8_t n_r
             if (c->col_pins[k] >= MX_MAX_PINS) return "column pin number > 15 (0-7 = GPA, 8-15 = GPB): fix col_pins";
             if (c->col_pins[k] == 7 || c->col_pins[k] == 15) return "column on GPA7 or GPB7: those MCP23017 pins are output-only, so move the column to another pin (rows may use them)";
         }
-        uint16_t rm = pin_mask(c->row_pins, c->n_rows), cm = pin_mask(c->col_pins, c->n_cols);
-        if (__builtin_popcount(rm) != c->n_rows || __builtin_popcount(cm) != c->n_cols) return "a pin is listed twice in a chip's rows or columns: make each pin appear once";
-        if (rm & cm) return "a pin is both a row and a column: assign it to one role";
+        if (c->n_ind > MX_MAX_PINS) return "indicator count > 16: fix n_ind";
+        for (uint8_t k = 0; k < c->n_ind; k++)
+            if (c->ind_pins[k] >= MX_MAX_PINS) return "indicator pin number > 15 (0-7 = GPA, 8-15 = GPB): fix ind_pins";
+        uint16_t rm = pin_mask(c->row_pins, c->n_rows), cm = pin_mask(c->col_pins, c->n_cols), im = pin_mask(c->ind_pins, c->n_ind);
+        if (__builtin_popcount(rm) != c->n_rows || __builtin_popcount(cm) != c->n_cols || __builtin_popcount(im) != c->n_ind) return "a pin is listed twice in a chip's rows, columns or indicators: make each pin appear once";
+        if ((rm & cm) || (rm & im) || (cm & im)) return "a pin has two roles (row, column, indicator): assign it to one role";
         if (!c->map) return "chip has no map: provide n_rows * n_cols mx_pos_t entries";
         for (uint16_t k = 0; k < (uint16_t)c->n_rows * c->n_cols; k++) {
             if (c->map[k].row == MX_POS_NONE) continue;
             if (c->map[k].row >= n_rows || c->map[k].col >= n_cols) return "map entry outside the logical matrix: fix the map or the logical size";
+            uint16_t cell = (uint16_t)(c->map[k].row * 32 + c->map[k].col);
+            if (claimed[cell / 8] & (1u << (cell % 8))) return "two positions map to the same logical cell: give each switch a unique logical (row, col)";
+            claimed[cell / 8] |= (uint8_t)(1u << (cell % 8));
         }
     }
     return 0;
 }
 
-// Write the three configuration registers. GPIO first so rows come up high
-// (no spurious low pulse) before IODIR turns them into outputs.
+// Configure one chip. OLAT first (rows 0, everything else high, so indicators
+// start off), then pull-ups on columns only, then IODIR with every pin an input
+// except the indicators: all rows start high-impedance.
+static uint16_t chip_dir(const mx_chip_cfg_t *c, int active_row) {
+    uint16_t dir = (uint16_t)~pin_mask(c->ind_pins, c->n_ind); // 1 = input
+    if (active_row >= 0) dir &= (uint16_t)~((uint16_t)1 << c->row_pins[active_row]);
+    return dir;
+}
+
+static bool write16(const mx_bus_t *bus, uint8_t addr, uint8_t reg, uint16_t v) {
+    uint8_t b[2] = {(uint8_t)(v & 0xFF), (uint8_t)(v >> 8)};
+    return bus->write(bus->ctx, addr, reg, b, 2);
+}
+
 static bool chip_init(const mx_bus_t *bus, const mx_chip_cfg_t *c) {
-    uint16_t rows = pin_mask(c->row_pins, c->n_rows);
+    uint16_t olat = (uint16_t)~pin_mask(c->row_pins, c->n_rows);
     uint16_t cols = pin_mask(c->col_pins, c->n_cols);
-    uint8_t high[2]   = {0xFF, 0xFF};
-    uint8_t pullup[2] = {(uint8_t)(cols & 0xFF), (uint8_t)(cols >> 8)};
-    uint16_t dir      = (uint16_t)~rows; // 1 = input; only rows are outputs
-    uint8_t iodir[2]  = {(uint8_t)(dir & 0xFF), (uint8_t)(dir >> 8)};
-    return bus->write(bus->ctx, c->addr, MX_REG_GPIOA, high, 2) && bus->write(bus->ctx, c->addr, MX_REG_GPPUA, pullup, 2) && bus->write(bus->ctx, c->addr, MX_REG_IODIRA, iodir, 2);
+    return write16(bus, c->addr, MX_REG_GPIOA, olat) && write16(bus, c->addr, MX_REG_GPPUA, cols) && write16(bus, c->addr, MX_REG_IODIRA, chip_dir(c, -1));
 }
 
 void mx_init(mx_state_t *s, const mx_bus_t *bus, const mx_chip_cfg_t *chips, uint8_t n_chips, uint8_t n_rows, uint8_t n_cols) {
@@ -60,10 +76,8 @@ void mx_init(mx_state_t *s, const mx_bus_t *bus, const mx_chip_cfg_t *chips, uin
 // Scan one chip into acc[]; false if the bus failed (acc is then to be discarded).
 static bool scan_chip(const mx_bus_t *bus, const mx_chip_cfg_t *c, mx_row_t *acc) {
     for (uint8_t r = 0; r < c->n_rows; r++) {
-        uint16_t drive = (uint16_t)~((uint16_t)1 << c->row_pins[r]);
-        uint8_t out[2] = {(uint8_t)(drive & 0xFF), (uint8_t)(drive >> 8)};
         uint8_t in[2];
-        if (!bus->write(bus->ctx, c->addr, MX_REG_GPIOA, out, 2)) return false;
+        if (!write16(bus, c->addr, MX_REG_IODIRA, chip_dir(c, r))) return false; // only row r becomes an output (low)
         if (!bus->read(bus->ctx, c->addr, MX_REG_GPIOA, in, 2)) return false;
         uint16_t v = (uint16_t)in[0] | ((uint16_t)in[1] << 8);
         for (uint8_t k = 0; k < c->n_cols; k++) {

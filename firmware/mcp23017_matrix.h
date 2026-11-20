@@ -1,12 +1,13 @@
 // Pure, host-testable matrix scan logic for MCP23017-based breakaway pieces.
 // No QMK or hardware headers: the I2C bus is injected (see mx_bus_t).
 //
-// Row drive: MCP23017 outputs are push-pull. The active row is driven low and every
-// other row is driven HIGH (not switched to input). That is safe with COL2ROW
-// diodes: the diode cathode is on the row and the anode on the column, so a row at
-// VDD reverse-biases it and a column (weak pull-up to VDD) cannot be pulled low
-// by an unselected row. (A floating row would be equally safe; driving high keeps
-// rows from picking up noise.)
+// Row drive: the MCP23017 outputs are push-pull, so a row driven high could fight
+// the other side of a diode path. Per docs/rev1-spec.md section 7 and D4, only the
+// active row is an output (driven low, OLAT bit 0); every other row is an input
+// (IODIR 1, pull-up off, high impedance) and is NEVER driven high. This matters
+// because the F-nav 4-line header can be plugged in reversed: a row driven high
+// could then be shorted to a column or another row. Scanning therefore changes
+// IODIR per row; OLAT bits of rows are written once (0) at init.
 //
 // Wiring model (locked design): each chip drives a purely local COL2ROW diode
 // matrix. Row pins are outputs, driven low one at a time; column pins are inputs
@@ -48,6 +49,8 @@ typedef struct {
     uint8_t n_rows, n_cols;   // each <= MX_MAX_PINS
     uint8_t row_pins[MX_MAX_PINS];
     uint8_t col_pins[MX_MAX_PINS];
+    uint8_t n_ind;            // indicator (LED) outputs: not matrix lines, set high (off) at init
+    uint8_t ind_pins[MX_MAX_PINS];
     const mx_pos_t *map;      // n_rows * n_cols entries, row-major [row][col]
 } mx_chip_cfg_t;
 

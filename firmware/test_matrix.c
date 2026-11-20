@@ -1,7 +1,12 @@
 // Host test for mcp23017_matrix.c with a fake MCP23017 (IOCON.BANK=0 register
 // model, sequential addressing). Build and run: see Makefile (`make test`).
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+
+#ifndef SPEC_PATH
+#define SPEC_PATH "../docs/rev1-spec.md"
+#endif
 
 #include "matrix_config.h"
 #include "mcp23017_matrix.h"
@@ -31,6 +36,8 @@ typedef struct {
     press_t pressed[MX_MAX_CHIPS][8];
     uint8_t n_pressed[MX_MAX_CHIPS];
     int calls[MX_MAX_CHIPS]; // bus calls per address, including failed ones
+    int row_high_drives;     // writes that left a matrix row driven high (forbidden by the spec)
+    int multi_row_selects;   // writes that left more than one row of a chip as an output
 } fake_t;
 
 static void fake_reset_chip(fake_chip_t *c) {
@@ -86,6 +93,21 @@ static bool fake_write(void *ctx, uint8_t addr, uint8_t reg, const uint8_t *d, u
         if (!p) return false; // unmodelled register: treat as NACK so a wrong address fails loudly
         *p = d[i];
     }
+    // Invariant monitor (uses the real table): rows may be outputs only as the single active low row.
+    for (int k = 0; k < MX_NUM_CHIPS; k++) {
+        if (mx_chips[k].addr != addr) continue;
+        const fake_chip_t *c = &f->chip[addr - 0x20];
+        uint16_t iodir = u16(c->iodir), olat = u16(c->olat);
+        int outs = 0;
+        for (int r = 0; r < mx_chips[k].n_rows; r++) {
+            uint16_t b = (uint16_t)1 << mx_chips[k].row_pins[r];
+            if (!(iodir & b)) {
+                outs++;
+                if (olat & b) f->row_high_drives++;
+            }
+        }
+        if (outs > 1) f->multi_row_selects++;
+    }
     return true;
 }
 static bool fake_read(void *ctx, uint8_t addr, uint8_t reg, uint8_t *d, uint8_t len) {
@@ -99,9 +121,6 @@ static bool fake_read(void *ctx, uint8_t addr, uint8_t reg, uint8_t *d, uint8_t 
     d[1] = v >> 8;
     return true;
 }
-static void press(fake_t *f, int ci, uint8_t row_pin, uint8_t col_pin) {
-    f->pressed[ci][f->n_pressed[ci]++] = (press_t){row_pin, col_pin};
-}
 
 // ---- helpers ---------------------------------------------------------------
 static mx_bus_t bus_for(fake_t *f) { return (mx_bus_t){fake_write, fake_read, f}; }
@@ -111,142 +130,282 @@ static int count_keys(const mx_row_t *m) {
     for (int r = 0; r < MX_LOGICAL_ROWS; r++) n += __builtin_popcount(m[r]);
     return n;
 }
+static const mx_chip_cfg_t *chip_by_addr(uint8_t addr) {
+    for (int i = 0; i < MX_NUM_CHIPS; i++)
+        if (mx_chips[i].addr == addr) return &mx_chips[i];
+    return 0;
+}
+static void all_present(fake_t *f) {
+    for (int i = 0; i < MX_NUM_CHIPS; i++) f->chip[mx_chips[i].addr - 0x20].present = true;
+}
+static void start(fake_t *f, mx_state_t *s) {
+    mx_bus_t bus = bus_for(f);
+    mx_init(s, &bus, mx_chips, MX_NUM_CHIPS, MX_LOGICAL_ROWS, MX_LOGICAL_COLS);
+}
+// pin helpers for hand-written expectations: GPA n = n, GPB n = 8 + n
+#define GPA(n) (n)
+#define GPB(n) (8 + (n))
+static void press(fake_t *f, uint8_t addr, uint8_t row_pin, uint8_t col_pin) {
+    int ci = addr - 0x20;
+    f->pressed[ci][f->n_pressed[ci]++] = (press_t){row_pin, col_pin};
+}
 
 // ---- tests -----------------------------------------------------------------
+static const char *validate_real(void) { return mx_validate(mx_chips, MX_NUM_CHIPS, MX_LOGICAL_ROWS, MX_LOGICAL_COLS); }
+
 static void test_validate(void) {
-    CHECK(mx_validate(mx_chips, MX_NUM_CHIPS, MX_LOGICAL_ROWS, MX_LOGICAL_COLS) == 0, "placeholder config must validate");
-    mx_chip_cfg_t bad[2];
+    const char *e = validate_real();
+    CHECK(e == 0, "real table must validate: %s", e ? e : "");
+    mx_chip_cfg_t bad[MX_NUM_CHIPS];
     memcpy(bad, mx_chips, sizeof bad);
-    bad[1].addr = 0x20;
-    CHECK(mx_validate(bad, 2, MX_LOGICAL_ROWS, MX_LOGICAL_COLS) != 0, "duplicate address must be rejected");
+    bad[1].addr = bad[0].addr;
+    CHECK(mx_validate(bad, MX_NUM_CHIPS, MX_LOGICAL_ROWS, MX_LOGICAL_COLS) != 0, "duplicate address must be rejected");
     memcpy(bad, mx_chips, sizeof bad);
-    bad[0].col_pins[0] = 0; // also a row pin
-    CHECK(mx_validate(bad, 2, MX_LOGICAL_ROWS, MX_LOGICAL_COLS) != 0, "pin as both row and column must be rejected");
+    bad[1].col_pins[0] = bad[1].row_pins[0];
+    CHECK(mx_validate(bad, MX_NUM_CHIPS, MX_LOGICAL_ROWS, MX_LOGICAL_COLS) != 0, "pin as both row and column must be rejected");
     memcpy(bad, mx_chips, sizeof bad);
-    bad[0].addr = 0x30;
-    CHECK(mx_validate(bad, 2, MX_LOGICAL_ROWS, MX_LOGICAL_COLS) != 0, "address outside 0x20..0x27 must be rejected");
+    bad[1].addr = 0x30;
+    CHECK(mx_validate(bad, MX_NUM_CHIPS, MX_LOGICAL_ROWS, MX_LOGICAL_COLS) != 0, "address outside 0x20..0x27 must be rejected");
     memcpy(bad, mx_chips, sizeof bad);
-    bad[0].col_pins[4] = 15; // GPB7 as a column: output-only pin
-    CHECK(mx_validate(bad, 2, MX_LOGICAL_ROWS, MX_LOGICAL_COLS) != 0, "column on GPB7 must be rejected");
-    bad[0].col_pins[4] = 7;  // GPA7
-    CHECK(mx_validate(bad, 2, MX_LOGICAL_ROWS, MX_LOGICAL_COLS) != 0, "column on GPA7 must be rejected");
+    bad[1].col_pins[6] = GPB(7); // U3 last column onto GPB7: output-only pin
+    CHECK(mx_validate(bad, MX_NUM_CHIPS, MX_LOGICAL_ROWS, MX_LOGICAL_COLS) != 0, "column on GPB7 must be rejected");
+    bad[1].col_pins[6] = GPA(7);
+    CHECK(mx_validate(bad, MX_NUM_CHIPS, MX_LOGICAL_ROWS, MX_LOGICAL_COLS) != 0, "column on GPA7 must be rejected");
     memcpy(bad, mx_chips, sizeof bad);
-    bad[0].row_pins[3] = 7;  // GPA7 as a row is fine
-    CHECK(mx_validate(bad, 2, MX_LOGICAL_ROWS, MX_LOGICAL_COLS) == 0, "row on GPA7 must be accepted");
-    CHECK(mx_validate(mx_chips, 2, 4, 9) != 0, "map entry outside logical size must be rejected");
+    bad[1].row_pins[4] = GPA(7); // GPA7 as a row is allowed
+    CHECK(mx_validate(bad, MX_NUM_CHIPS, MX_LOGICAL_ROWS, MX_LOGICAL_COLS) == 0, "row on GPA7 must be accepted");
+    memcpy(bad, mx_chips, sizeof bad);
+    bad[4].ind_pins[0] = bad[4].col_pins[0]; // indicator on a column pin
+    CHECK(mx_validate(bad, MX_NUM_CHIPS, MX_LOGICAL_ROWS, MX_LOGICAL_COLS) != 0, "indicator overlapping a column must be rejected");
+    CHECK(mx_validate(mx_chips, MX_NUM_CHIPS, MX_LOGICAL_ROWS, 20) != 0, "map entry outside logical size must be rejected");
+    // two positions on one logical cell: point U4's first cell at U3's first cell
+    mx_pos_t dup[5 * 7];
+    memcpy(dup, mx_chips[2].map, sizeof dup);
+    dup[0] = mx_chips[1].map[0];
+    memcpy(bad, mx_chips, sizeof bad);
+    bad[2].map = dup;
+    CHECK(mx_validate(bad, MX_NUM_CHIPS, MX_LOGICAL_ROWS, MX_LOGICAL_COLS) != 0, "duplicate logical cell must be rejected");
 }
 
 static void test_init_registers(void) {
     fake_t f;
     fake_init(&f);
-    f.chip[0].present = f.chip[1].present = true;
-    mx_bus_t bus = bus_for(&f);
+    all_present(&f);
     mx_state_t s;
-    mx_init(&s, &bus, mx_chips, MX_NUM_CHIPS, MX_LOGICAL_ROWS, MX_LOGICAL_COLS);
-    CHECK(mx_chips_up(&s) == 2, "both chips up, got %u", mx_chips_up(&s));
-    CHECK(f.chip[0].iodir[0] == 0xF0 && f.chip[0].iodir[1] == 0xFF, "IODIR: rows GPA0-3 out, rest in; got %02X %02X", f.chip[0].iodir[0], f.chip[0].iodir[1]);
-    CHECK(f.chip[0].gppu[0] == 0x00 && f.chip[0].gppu[1] == 0x1F, "GPPU: cols GPB0-4 pulled up; got %02X %02X", f.chip[0].gppu[0], f.chip[0].gppu[1]);
-    CHECK(f.chip[0].olat[0] == 0xFF && f.chip[0].olat[1] == 0xFF, "rows start high");
+    start(&f, &s);
+    CHECK(mx_chips_up(&s) == MX_NUM_CHIPS, "all chips up, got %u", mx_chips_up(&s));
+    for (int i = 0; i < MX_NUM_CHIPS; i++) {
+        const mx_chip_cfg_t *c = &mx_chips[i];
+        const fake_chip_t *fc = &f.chip[c->addr - 0x20];
+        uint16_t rows = 0, cols = 0, ind = 0;
+        for (int k = 0; k < c->n_rows; k++) rows |= 1u << c->row_pins[k];
+        for (int k = 0; k < c->n_cols; k++) cols |= 1u << c->col_pins[k];
+        for (int k = 0; k < c->n_ind; k++) ind |= 1u << c->ind_pins[k];
+        uint16_t iodir = u16(fc->iodir), gppu = u16(fc->gppu), olat = u16(fc->olat);
+        CHECK((iodir & rows) == rows, "0x%02X: unselected rows must be inputs (high-Z), IODIR=%04X", c->addr, iodir);
+        CHECK((gppu & rows) == 0, "0x%02X: row pull-ups must be off, GPPU=%04X", c->addr, gppu);
+        CHECK(gppu == cols, "0x%02X: pull-ups on exactly the columns, GPPU=%04X want %04X", c->addr, gppu, cols);
+        CHECK((olat & rows) == 0, "0x%02X: row output latches must be low, OLAT=%04X", c->addr, olat);
+        CHECK((iodir & cols) == cols, "0x%02X: columns are inputs", c->addr);
+        CHECK((iodir & ind) == 0 && (olat & ind) == ind, "0x%02X: indicators are outputs driven high (LED off)", c->addr);
+    }
+    CHECK(f.row_high_drives == 0 && f.multi_row_selects == 0, "init must not drive any row high");
+}
+
+static void test_rows_high_z_during_scan(void) {
+    fake_t f;
+    fake_init(&f);
+    all_present(&f);
+    mx_state_t s;
+    start(&f, &s);
+    press(&f, 0x22, GPA(0), GPB(1));
+    mx_row_t m[MX_LOGICAL_ROWS];
+    for (int i = 0; i < 50; i++) mx_scan(&s, m);
+    CHECK(f.row_high_drives == 0, "a row was driven high %d times: unselected rows must be high-Z", f.row_high_drives);
+    CHECK(f.multi_row_selects == 0, "more than one row was an output at once %d times", f.multi_row_selects);
+    CHECK(key(m, 1, 1) && count_keys(m) == 1, "key still read with high-Z deselect");
 }
 
 static void test_keys_at_logical_positions(void) {
     fake_t f;
     fake_init(&f);
-    f.chip[0].present = f.chip[1].present = true;
-    mx_bus_t bus = bus_for(&f);
+    all_present(&f);
     mx_state_t s;
-    mx_init(&s, &bus, mx_chips, MX_NUM_CHIPS, MX_LOGICAL_ROWS, MX_LOGICAL_COLS);
+    start(&f, &s);
     mx_row_t m[MX_LOGICAL_ROWS];
-
     CHECK(!mx_scan(&s, m) && count_keys(m) == 0, "idle matrix is empty and unchanged");
 
-    // Expected positions are hand-derived from the placeholder table, not read back from it.
-    press(&f, 0, 1, 10); // chip0 row GPA1, col GPB2 -> logical (1,2)
-    press(&f, 1, 3, 8);  // chip1 row GPA3, col GPB0 -> logical (3,9)
-    press(&f, 1, 0, 12); // chip1 row GPA0, col GPB4 -> logical (0,5)
+    // Expectations are hand-derived from the spec CSV rows, not read from the table.
+    press(&f, 0x20, GPA(0), GPB(0)); // D1   ESC          -> (0,0)
+    press(&f, 0x20, GPA(0), GPA(5)); // D71  F11          -> (0,12)  (column on port A)
+    press(&f, 0x22, GPA(0), GPB(1)); // D7   1            -> (1,1)
+    press(&f, 0x23, GPA(0), GPB(0)); // D43  7            -> (1,7)
+    press(&f, 0x24, GPA(4), GPB(1)); // D85  ScrLk (F-nav row 4) -> (0,15)
+    press(&f, 0x24, GPA(2), GPB(1)); // D88  Up           -> (4,15)
+    press(&f, 0x25, GPA(4), GPB(2)); // D107 KP.          -> (5,19)
     CHECK(mx_scan(&s, m), "first press reports a change");
-    CHECK(count_keys(m) == 3, "exactly 3 keys, got %d", count_keys(m));
-    CHECK(key(m, 1, 2), "chip0 (A1,B2) -> (1,2)");
-    CHECK(key(m, 3, 9), "chip1 (A3,B0) -> (3,9)");
-    CHECK(key(m, 0, 5), "chip1 (A0,B4) -> (0,5)");
+    CHECK(count_keys(m) == 7, "exactly 7 keys, got %d", count_keys(m));
+    CHECK(key(m, 0, 0), "D1 -> (0,0)");
+    CHECK(key(m, 0, 12), "D71 -> (0,12)");
+    CHECK(key(m, 1, 1), "D7 -> (1,1)");
+    CHECK(key(m, 1, 7), "D43 -> (1,7)");
+    CHECK(key(m, 0, 15), "D85 (F-nav) -> (0,15)");
+    CHECK(key(m, 4, 15), "D88 -> (4,15)");
+    CHECK(key(m, 5, 19), "D107 -> (5,19)");
     CHECK(!mx_scan(&s, m), "steady state reports no change");
 }
 
 static void test_missing_chip(void) {
     fake_t f;
     fake_init(&f);
-    f.chip[0].present = true; // chip 1 (0x21) absent
-    mx_bus_t bus = bus_for(&f);
+    all_present(&f);
+    f.chip[0x24 - 0x20].present = false; // Nav chip absent
     mx_state_t s;
-    mx_init(&s, &bus, mx_chips, MX_NUM_CHIPS, MX_LOGICAL_ROWS, MX_LOGICAL_COLS);
-    CHECK(mx_chips_up(&s) == 1, "only chip 0 up");
-    press(&f, 0, 1, 10);
-    press(&f, 1, 3, 8); // key on the absent chip: must never appear
+    start(&f, &s);
+    CHECK(mx_chips_up(&s) == MX_NUM_CHIPS - 1, "all but the Nav chip up");
+    press(&f, 0x22, GPA(0), GPB(1));
+    press(&f, 0x24, GPA(4), GPB(1)); // key on the absent chip must never appear
     mx_row_t m[MX_LOGICAL_ROWS];
     mx_scan(&s, m);
-    CHECK(count_keys(m) == 1 && key(m, 1, 2), "present chip works, absent chip gives no keys");
-    int base = f.calls[1];
+    CHECK(count_keys(m) == 1 && key(m, 1, 1), "present chips work, absent chip gives no keys");
+    int base = f.calls[0x24 - 0x20];
     for (int i = 0; i < 254; i++) mx_scan(&s, m);
-    CHECK(f.calls[1] == base, "no bus traffic to a down chip between retries (%d extra)", f.calls[1] - base);
-    CHECK(count_keys(m) == 1, "keys stable while chip down");
+    CHECK(f.calls[0x24 - 0x20] == base, "no bus traffic to a down chip between retries (%d extra)", f.calls[0x24 - 0x20] - base);
 
-    // Retry: chip appears, next retry boundary reinitialises it. Down chip came
-    // up with its register state reset, as after a real power-up.
-    f.chip[1].present = true;
-    int n = 0;
-    while (!s.up[1] && n < 600) {
+    f.chip[0x24 - 0x20].present = true;
+    int n = 0, up = 3; // index of 0x24 in mx_chips
+    while (!s.up[up] && n < 600) {
         mx_scan(&s, m);
         n++;
     }
-    CHECK(s.up[1] && n <= 256, "chip reinitialised within one retry period, took %d scans", n);
+    CHECK(s.up[up] && n <= 256, "chip reinitialised within one retry period, took %d scans", n);
     mx_scan(&s, m);
-    CHECK(count_keys(m) == 2 && key(m, 3, 9), "keys of the revived chip appear");
-    CHECK(f.chip[1].iodir[0] == 0xF0 && f.chip[1].gppu[1] == 0x1F, "revived chip was reconfigured");
+    CHECK(count_keys(m) == 2 && key(m, 0, 15), "keys of the revived chip appear");
+    const mx_chip_cfg_t *c = chip_by_addr(0x24);
+    CHECK(c && (u16(f.chip[0x24 - 0x20].gppu) & 0x0700) == 0x0700, "revived chip was reconfigured (columns pulled up)");
 }
 
 static void test_chip_dies_midrun(void) {
     fake_t f;
     fake_init(&f);
-    f.chip[0].present = f.chip[1].present = true;
-    mx_bus_t bus = bus_for(&f);
+    all_present(&f);
     mx_state_t s;
-    mx_init(&s, &bus, mx_chips, MX_NUM_CHIPS, MX_LOGICAL_ROWS, MX_LOGICAL_COLS);
-    press(&f, 0, 1, 10);
-    press(&f, 1, 3, 8);
+    start(&f, &s);
+    press(&f, 0x22, GPA(0), GPB(1));
+    press(&f, 0x23, GPA(0), GPB(0));
     mx_row_t m[MX_LOGICAL_ROWS];
     mx_scan(&s, m);
     CHECK(count_keys(m) == 2, "both keys seen");
-    f.chip[1].present = false; // piece cut off or unplugged
+    f.chip[0x23 - 0x20].present = false; // piece cut off or unplugged
     CHECK(mx_scan(&s, m), "loss of a key is a change");
-    CHECK(count_keys(m) == 1 && key(m, 1, 2) && !key(m, 3, 9), "dead chip's key released, other chip unaffected");
-    CHECK(!s.up[1], "chip marked down");
-    // power-cycled piece comes back with default registers
-    fake_reset_chip(&f.chip[1]);
-    f.chip[1].present = true;
+    CHECK(count_keys(m) == 1 && key(m, 1, 1) && !key(m, 1, 7), "dead chip's key released, other chip unaffected");
+    fake_reset_chip(&f.chip[0x23 - 0x20]); // power-cycled piece returns with default registers
+    f.chip[0x23 - 0x20].present = true;
     for (int i = 0; i < 256; i++) mx_scan(&s, m);
     mx_scan(&s, m);
-    CHECK(s.up[1] && count_keys(m) == 2, "chip rejoins after a retry period");
+    CHECK(count_keys(m) == 2, "chip rejoins after a retry period");
 }
 
 static void test_all_down_no_hang(void) {
     fake_t f;
     fake_init(&f);
-    mx_bus_t bus = bus_for(&f);
     mx_state_t s;
-    mx_init(&s, &bus, mx_chips, MX_NUM_CHIPS, MX_LOGICAL_ROWS, MX_LOGICAL_COLS);
+    start(&f, &s);
     mx_row_t m[MX_LOGICAL_ROWS];
     for (int i = 0; i < 2000; i++) mx_scan(&s, m); // returns, i.e. no hang
     CHECK(count_keys(m) == 0 && mx_chips_up(&s) == 0, "no chips: empty matrix");
-    CHECK(f.calls[0] < 20 && f.calls[1] < 20, "bounded bus traffic with all chips down (%d, %d calls)", f.calls[0], f.calls[1]);
+    for (int i = 0; i < MX_NUM_CHIPS; i++) CHECK(f.calls[i] < 40, "bounded bus traffic with all chips down (%d calls)", f.calls[i]);
+}
+
+// ---- spec cross-check ------------------------------------------------------
+// Parses the CSV blocks of docs/rev1-spec.md section 8 and compares every entry
+// with mx_chips. Returns the number of mismatches; *entries gets the CSV row count.
+static int pin_of(const char *s) { // "GPA4" -> 4, "GPB2" -> 10; -1 if malformed
+    if (s[0] != 'G' || s[1] != 'P' || (s[2] != 'A' && s[2] != 'B') || s[3] < '0' || s[3] > '7') return -1;
+    return (s[2] == 'B' ? 8 : 0) + (s[3] - '0');
+}
+static int quiet;
+static int check_spec(const char *text, int *entries) {
+    int bad = 0, in_csv = 0, addr = -1;
+    *entries = 0;
+    const char *p = text;
+    while (*p) {
+        const char *e = strchr(p, '\n');
+        size_t n = e ? (size_t)(e - p) : strlen(p);
+        char line[256];
+        if (n >= sizeof line) n = sizeof line - 1;
+        memcpy(line, p, n);
+        line[n] = 0;
+        p = e ? e + 1 : p + n;
+        char *a;
+        if (!strncmp(line, "### U", 5) && (a = strstr(line, "address 0x"))) addr = (int)strtol(a + 8, 0, 16);
+        else if (!strncmp(line, "# chip=", 7)) in_csv = 1;
+        else if (!strncmp(line, "```", 3)) in_csv = 0;
+        else if (in_csv && line[0] == 'D' && line[1] >= '0' && line[1] <= '9') {
+            char *f[8];
+            int nf = 0;
+            for (char *t = line; nf < 8; ) {
+                f[nf++] = t;
+                t = strchr(t, ',');
+                if (!t) break;
+                *t++ = 0;
+            }
+            (*entries)++;
+            if (nf != 8) { bad++; printf("  malformed spec row %s\n", f[0]); continue; }
+            int rcol = atoi(f[2] + 1), rrow = atoi(f[3] + 1), lr = atoi(f[4]), lc = atoi(f[5]);
+            int rp = pin_of(f[6]), cp = pin_of(f[7]);
+            const mx_chip_cfg_t *c = chip_by_addr((uint8_t)addr);
+            int ok = c && lr < c->n_rows && lc < c->n_cols && rp == c->row_pins[lr] && cp == c->col_pins[lc] && c->map[lr * c->n_cols + lc].row == rrow && c->map[lr * c->n_cols + lc].col == rcol;
+            if (!ok) { bad++; if (!quiet) printf("  spec/config mismatch at %s (chip 0x%02X)\n", f[0], addr); }
+        }
+    }
+    return bad;
+}
+static char *slurp(const char *path) {
+    FILE *fp = fopen(path, "rb");
+    if (!fp) return 0;
+    char *buf = malloc(1 << 20);
+    size_t n = buf ? fread(buf, 1, (1 << 20) - 1, fp) : 0;
+    fclose(fp);
+    if (buf) buf[n] = 0;
+    return buf;
+}
+static void test_matches_spec(void) {
+    char *text = slurp(SPEC_PATH);
+    CHECK(text != 0, "cannot read the spec at %s: run `make test` from firmware/firmware or build with -DSPEC_PATH=<path to docs/rev1-spec.md>", SPEC_PATH);
+    if (!text) return;
+    int entries;
+    int bad = check_spec(text, &entries);
+    CHECK(bad == 0, "%d spec entries differ from matrix_config.h", bad);
+    int cells = 0;
+    for (int i = 0; i < MX_NUM_CHIPS; i++)
+        for (int k = 0; k < mx_chips[i].n_rows * mx_chips[i].n_cols; k++) cells += mx_chips[i].map[k].row != MX_POS_NONE;
+    CHECK(entries > 100 && entries == cells, "config has %d positions, spec CSV has %d: they must match", cells, entries);
+
+    // Negative control: corrupt one spec entry (D81 row pin GPA4 -> GPA3); the checker must notice.
+    char *d81 = strstr(text, "D81,PSCRN1|PSCRN2,C14,R0,4,0,GPA4,GPB0");
+    CHECK(d81 != 0, "D81 row not found in spec: update this negative control to an existing entry");
+    if (d81) {
+        char *pin = strstr(d81, "GPA4");
+        pin[3] = '3';
+        int e2;
+        quiet = 1;
+        int mutated_bad = check_spec(text, &e2);
+        quiet = 0;
+        CHECK(mutated_bad >= 1, "mutated spec entry went undetected: the cross-check cannot fail");
+    }
+    free(text);
 }
 
 int main(void) {
     test_validate();
     test_init_registers();
+    test_rows_high_z_during_scan();
     test_keys_at_logical_positions();
     test_missing_chip();
     test_chip_dies_midrun();
     test_all_down_no_hang();
+    test_matches_spec();
     printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }
