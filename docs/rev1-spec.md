@@ -6,90 +6,91 @@ Status: draft for review. Scope: the electrical design of rev1 only (matrix, GPI
 
 Rev0 is a passive diode matrix: 111 key positions, one 1N4148 per position, 150 switch footprints (some positions carry up to four alternative footprints), five breakaway pieces and no controller. The rev0 numbers used here were derived from the rev0 netlist (each footprint's column net and its diode's row net): 111 diodes, 111 distinct (column, row) cells, one diode per cell. Source of the rev0 per-piece key counts: the same netlist, split by the rev0 column and row nets.
 
-Terms. A **position** is one diode cell (named by its rev0 diode reference, D1 to D111), which may carry several alternative switch footprints of which exactly one is populated. A **piece** is one of the five breakaway sections of the panel. A **seam** is the slot between two pieces. An **extender** is a GPIO expander chip (MCP23017, with 16 I/O lines in two 8-bit banks, GPA0 to GPA7 and GPB0 to GPB7) reached over I2C (a two-wire bus: SDA data, SCL clock). A **local matrix** is the row and column grid of one extender, wired only inside one piece. A **line** is one extender I/O pin used as a row, a column or an indicator output. COL2ROW means the diode cathode faces the row line: current flows column, switch, diode anode, diode cathode, row. The **controller** is the off-board MCU module that runs QMK and is the I2C master. **Bus** means the six-wire cable set defined in section 5.
+Terms. A **position** is one diode cell (named by its rev0 diode reference, D1 to D111), which may carry several alternative switch footprints of which exactly one is populated. A **piece** is one of the five breakaway sections of the panel. A **seam** is the slot between two pieces. An **extender** is a GPIO expander chip (MCP23017, with 16 I/O lines in two 8-bit banks, GPA0 to GPA7 and GPB0 to GPB7) reached over I2C (a two-wire bus: SDA data, SCL clock). A **local matrix** is the row and column grid of one extender, wired inside one piece (the one exception is the F-nav keys, D3). A **line** is one extender I/O pin used as a row, a column or an indicator output. COL2ROW means the diode cathode faces the row line: current flows column, switch, diode anode, diode cathode, row. The **controller** is the off-board MCU module that runs QMK and is the I2C master. **Bus** means the four-wire I2C cable defined in section 5. The **F-nav matrix header** is the separate four-wire cable joining the F-nav piece to the Nav piece (D3).
 
 ## 2. Locked decisions (inputs, not reopened here)
 
-- Each piece must work fully separated, so no row or column line crosses a seam. Each piece has its own extender(s) and a purely local matrix; only the I2C bus crosses seams.
-- Extender is through-hole DIP-28 in a socket. Part: MCP23018 was the locked primary and MCP23017 the locked fallback; the fallback trigger was met (decision D4a), so rev1 uses MCP23017 on all six chips. All headers and connectors are 2.54 mm pitch. Diodes stay through-hole 1N4148, one orientation everywhere, COL2ROW.
-- Wired, QMK-compatible firmware; the MCU is a separate module reached by a 4 to 6 wire cable; pull-ups are on the controller side only; extender address is set by solder jumpers on A0 to A2.
+- Each piece except F-nav must work fully separated, so no row or column line crosses a seam, each such piece has its own extender(s) and a purely local matrix, and only the four-wire I2C bus crosses its seams. Director decision, round 3: the F-nav piece has no extender; its three keys are a row on the Nav extender, reached over a four-wire matrix cable (D3).
+- Extender is the MCP23017 (the locked MCP23018 primary was dropped by D4a), SMD, on the back of the board: SOIC-28W for U3, U4, U5, U6 and SSOP-28 for U1. No DIP sockets. All headers and connectors are 2.54 mm pitch. Diodes stay through-hole 1N4148, one orientation everywhere, COL2ROW.
+- Wired, QMK-compatible firmware; the MCU is a separate module reached by a 4-wire cable (the bus); pull-ups are on the controller side only; extender address is set by solder jumpers on A0 to A2.
 
 ## 3. Decisions made in this spec
 
 Each decision lists its rationale and the trigger that would reopen it.
 
-**D1. Six extenders, one per piece except Main, which has two.** The Main piece has 67 positions. One extender has 16 lines, and r + c <= 16 allows at most 8 x 8 = 64 cells, so one chip cannot hold Main. Main is therefore split into two chip-local sub-matrices (Main-L: rev0 columns C0 to C6, Main-R: C7 to C13), each 5 rows x 7 columns = 12 lines. The alternative, one 5 x 14 matrix (19 lines) spread over two chips, would need a row driven by one chip and read by the other, which defeats the chip-local property and doubles the scan traffic per row. Reopen if an extender with more than 16 lines per chip is adopted, which would allow Main on one chip.
+**D1. Five extenders: one per piece except Main (two) and F-nav (none).** The Main piece has 67 positions. One extender has 16 lines, and r + c <= 16 allows at most 8 x 8 = 64 cells, so one chip cannot hold Main. Main is therefore split into two chip-local sub-matrices (Main-L: rev0 columns C0 to C6, Main-R: C7 to C13), each 5 rows x 7 columns = 12 lines. The alternative, one 5 x 14 matrix (19 lines) spread over two chips, would need a row driven by one chip and read by the other, which defeats the chip-local property and doubles the scan traffic per row. Reopen if an extender with more than 16 lines per chip is adopted, which would allow Main on one chip.
 
-**D2. Local matrix shapes.** Chosen to keep each key one trace from its chip and to keep row counts equal to physical rows (rev0 row labels R0 to R5 are kept only as traceability data, not as a constraint). F-row: 1 row x 13 columns. F-nav: 1 x 3. Main-L and Main-R: 5 x 7 each. Nav: 4 x 3 (rev0 row R3 has no keys, so it is dropped). Numpad: 5 x 4. Rationale: smallest line counts that keep wiring local; every chip is at or under 14 lines including indicators (section 4). Reopen if a donor board needs a key position that does not fit (section 9).
+**D2. Local matrix shapes.** Chosen to keep each key one trace from its chip (rev0 row labels R0 to R5 are kept only as traceability data, not as a constraint). F-row: 1 row x 13 columns. Main-L and Main-R: 5 x 7 each. Nav: 5 rows x 3 columns, being rev0 rows R1, R2, R4, R5 (rev0 R3 has no keys, so it is dropped) plus the F-nav keys as a fifth row. Numpad: 5 x 4. Every chip is at or under 14 lines including indicators (section 4). Reopen if a donor board needs a key position that does not fit (section 9).
 
-**D3. F-nav (three keys) keeps its own extender.** The locked rule (no line crosses a seam) leaves no way to share a chip with Nav. Cost: one socket and chip for three keys. Reopen if the locked rule is relaxed or a cheaper 8-bit expander in the same I2C family is accepted for this piece.
+**D3. F-nav (PrtSc, ScrLk, Pause) has no extender; it is a fifth row of the Nav extender (director decision).** The F-nav piece carries only its 3 switches, their 3 diodes and one 1x04 2.54 mm header (pin 1 row line, pins 2 to 4 the three column lines C14, C15, C16). A 4-wire cable joins it straight (pin n to pin n) to a matching 1x04 header on the Nav piece, where the row line goes to U5 GPA4 and the three column lines are the same nets as U5's columns GPB0 to GPB2. Rationale: the F-nav piece (3 keys, about 960 square mm) has no room for a chip and the bus ports on the back; the feasibility study found nothing fits. Consequences: this is the one place where matrix lines (not only the I2C bus) cross a seam, so the F-nav keys do not work when the cable is absent (the other four pieces still do); pin order reversal on that cable swaps keys but does not damage anything. U5 stays at 8 lines. Reopen if the F-nav keys must work without the cable, or a package small enough for that piece is found.
 
-**D4a. Part: MCP23017 on all six chips; MCP23018 only as an option.** Rationale: per the vendor datasheets read by the coordinator (MCP23017 rev D, DS20001952D, and the MCP23018 datasheet), the MCP23018 gets its eight addresses from a single ADDR pin set by an analog resistor divider (two resistors per chip), which conflicts with the locked solder-jumper addressing; the MCP23017 has three digital address pins A0 to A2 (pins 15 to 17) giving eight addresses, so solder jumpers work unchanged. Cost: the MCP23017 has push-pull outputs, not open-drain, which the matrix handles by direction switching (D4). KiCad symbol: `MCP23017x-x-SP`, DIP-28 socket. MCP23018 stays an option only with a per-chip divider (two resistors, tolerances to be checked against the datasheet table) replacing the A0-A2 jumpers; the parts are NOT pin-compatible (MCP23017: GPB0 to GPB7 pins 1 to 8, VDD 9, VSS 10, NC 11, SCL 12, SDA 13, NC 14, A0 to A2 15 to 17, RESET 18, INTB 19, INTA 20, GPA0 to GPA7 21 to 28), so a swap is a schematic and layout change. Reopen if: open-drain row outputs prove necessary (for example the diode-drop test in D4 fails), or divider addressing is accepted.
+**D4a. Part: MCP23017 on all five chips; MCP23018 only as an option.** Rationale: per the vendor datasheets read by the coordinator (MCP23017 rev D, DS20001952D, and the MCP23018 datasheet), the MCP23018 gets its eight addresses from a single ADDR pin set by an analog resistor divider (two resistors per chip), which conflicts with the locked solder-jumper addressing; the MCP23017 has three digital address pins A0 to A2 (pins 15 to 17) giving eight addresses, so solder jumpers work unchanged. Cost: the MCP23017 has push-pull outputs, not open-drain, which the matrix handles by direction switching (D4). MCP23018 stays an option only with a per-chip divider (two resistors, tolerances to be checked against the datasheet table) replacing the A0-A2 jumpers; the parts are NOT pin-compatible (MCP23017: GPB0 to GPB7 pins 1 to 8, VDD 9, VSS 10, NC 11, SCL 12, SDA 13, NC 14, A0 to A2 15 to 17, RESET 18, INTB 19, INTA 20, GPA0 to GPA7 21 to 28), so a swap is a schematic and layout change. Reopen if: open-drain row outputs prove necessary (for example the diode-drop test in D4 fails), or divider addressing is accepted.
+
+**D4b. Packages and symbols.** All MCP23017, SMD, on the back. SOIC-28W (KiCad symbol `MCP23017x-x-SO`, footprint `Package_SO:SOIC-28W_7.5x17.9mm_P1.27mm`) for U3, U4, U5, U6; SSOP-28 (symbol `MCP23017x-x-SS`, footprint `Package_SO:SSOP-28_5.3x10.2mm_P0.65mm`) for U1. Pin numbers are the same in all three packages: the datasheet (rev D) draws one pinout for SOIC, SPDIP and SSOP, and the KiCad stock symbol `MCP23017x-x-SS` extends `MCP23017x-x-SO` (checked in `Interface_Expansion.kicad_sym`), so the pin list in D4a holds for both. Rationale: the feasibility study (below, D8) found a socketed DIP-28 fits only on Nav. Reopen if a donor case cannot take back-side parts (D8).
 
 **D4. Matrix electrical convention.** Rows are extender outputs used in two states: driven low to select a row, and input (high impedance) or driven high otherwise; the firmware picks one deselect state and keeps it. Columns are extender inputs with the internal pull-ups (GPPU) enabled. Datasheet figures (source label WEB: MCP23017 DS20001952 rev D): pull-up current IPU 40 / 75 / 115 uA (min / typ / max) at VDD = 5 V; by arithmetic (author, 5 V divided by that current) this is about 125 / 67 / 43 kOhm (max / typ / min resistance). Both parts operate from 1.8 V to 5.5 V (WEB, same datasheet). This reading of "pull-ups on the controller side only" means: no external pull-up resistor on any piece, for I2C or for the matrix. Input low threshold: VIL max = 0.2 x VDD (WEB), 0.66 V at 3.3 V. A closed key drops the column to the row's output-low level (VOL) plus the 1N4148 forward drop; the author infers about 0.4 V for the diode at tens of microamps (inference, not measured), which leaves little margin under 0.66 V at 3.3 V once VOL is added. This must be bench-tested on the first board (open item). Output-only pins: the MCP23017 datasheet rev D lists GPA7 and GPB7 as output only, and rev C does not state it. Treat the limit as real: no column (input) uses GPA7 or GPB7; the mapping in section 8 respects this and the check script asserts it. Reopen if: the bench test fails (then raise VDD to 5 V, use a lower-drop diode, or move to open-drain output parts), or the internal pull-up value is unsuitable for the longest column trace.
 
 **D5. Extender addresses.** Table in section 6. Address jumpers are 3-pad solder jumpers (pad for the A pin, one pad to GND, one to VCC) delivered bridged to GND by a thin trace; to set a 1 the builder cuts the trace and bridges the VCC side. Rationale: a chip address pin must never float, and a default of 0x20 makes an unmodified board work alone. Reopen if more than 8 extenders are needed on one bus.
 
-**D6. Decoupling and reset.** One 100 nF ceramic capacitor (through-hole, 2.54 mm lead pitch) from VDD to VSS within 5 mm of every extender, plus one 10 uF capacitor per piece near its first bus port. RESET (active low) is tied directly to VCC on each extender, with no resistor. Rationale: the chip has a power-on reset; a direct tie avoids a floating pin and adds no pull-up resistor to a design that forbids them (D4). Reopen if: the controller must be able to reset a hung extender without power cycling the whole bus (then route RESET to bus pin 6, section 5), or I2C bus recovery by clocking fails in testing.
+**D6. Decoupling and reset.** One 100 nF 0805 SMD ceramic capacitor on the back next to each extender, from VDD to VSS within 5 mm of the pins (pins 9 and 10 are adjacent), plus one 10 uF 1206 SMD ceramic capacitor (X5R or better, rated 10 V or more) per piece that has an extender, near its first bus port. Rationale: 0805 and 1206 are the smallest sizes that are comfortable to hand-solder and are 1.3 to 1.6 mm tall, which keeps back-side height low; the 10 uF part is a ceramic, not a polarised tantalum or electrolytic (the brief expected a polarised part), because it cannot be fitted backwards, has no inrush failure mode on hot-plugged cables, and is lower than a THT electrolytic; its DC-bias derating (about half the capacitance at 3.3 V, typical, not measured) is acceptable for bulk. RESET (active low) is tied directly to VCC on each extender, with no resistor. Rationale: the chip has a power-on reset; a direct tie avoids a floating pin and adds no pull-up resistor to a design that forbids them (D4). Reopen if: the controller must be able to reset a hung extender without power cycling the whole bus (needs a fifth bus wire), or I2C bus recovery by clocking fails in testing.
 
-**D7. INT is optional and off by default.** Each extender's INT output (INTA and INTB mirrored in firmware) goes to bus pin 5 through a solder jumper that is open by default. Rationale: at power-up the INT pins of the chip are push-pull and would fight each other on a shared line; firmware must set open-drain INT mode (IOCON.ODR) on every extender before any INT jumper is closed. Scanning does not need INT. Reopen if: sleep or wake-on-keypress or lower scan latency is wanted.
+**D7. No interrupt line.** The INT jumpers and INT nets are dropped; INTA and INTB of every extender are left unconnected and the firmware polls (the scan cost is estimated in section 5). Rationale: the director-approved bus has four wires. Reopen if interrupt-driven scanning or wake-on-keypress is needed (then add a fifth bus wire and wire-OR the INT outputs in open-drain mode, IOCON.ODR set on every chip before connecting).
 
-**D8. Extender placement: service strip.** Rev0 pieces have no margin around the keys and the 14 mm switch cutouts leave about 5 mm between keys, so a 36 x 10 mm socket (28-pin, 0.3 inch row spacing) cannot sit between keys. Each piece gets a 14 mm deep service strip along one outer edge (the edge not facing another piece; F-row and F-nav: top, Main, Nav and Numpad: bottom), at least 42 mm long, carrying its extender socket(s), decoupling, address and INT jumpers and bus ports. Main has one socket in the strip under each half. Fallback: the bottom copper side under a key-free region. Not verified: whether any donor case has the clearance for a strip or for a 8 mm tall socket on the bottom side. Reopen on measuring the first donor case (README lists AEK, DELL AT101W, DELL AT101, Strong Man SMK-8851).
+**D8. Extender placement: on the back, inside the original outline.** The original rev0 outline is unchanged. Each extender, its 100 nF capacitor, its address jumpers (D5) and the bus ports sit on the back of the board, in free space under large keys and between key groups; a SOIC-28W is 7.5 x 17.9 mm and an SSOP-28 5.3 x 10.2 mm. The feasibility study (a file-based greedy packing, so a miss is not proof of impossibility) found: a socketed DIP-28 fits only on Nav, SOIC-28W fits Main (both chips) and Numpad on the back, SSOP-28 fits F-row, and F-nav fits nothing with the earlier 2x3 ports (hence D3). Candidate coordinates (KiCad board millimetres) from that study: Main around (141, 123) and (391, 128); F-row around (409.5, 40.8); Nav around (466, 111) (the study's DIP spot, now a SOIC); Numpad around (490.6, 135.2) or (510, 67). Final coordinates are the PCB worker's call. Source: the feasibility notes in the author's session scratchpad (`inside/NOTES.md`). Not verified: height of back-side parts against donor cases (open item).
 
-**D9. Lock indicators (Num, Caps, Scroll).** Three active-low outputs on the Numpad extender (GPA5 Num, GPA6 Caps, GPA7 Scroll) with a 470 Ohm series resistor each, brought to a 2.54 mm 1x04 header (pin 1 VCC for the LED anodes, pins 2 to 4 the three sink lines through the resistors). LEDs are off-board and wired by the builder. Rationale: an output driven low sinks the LED current (driven high, the LED is off because its anode is at VCC), and GPA7 may be used as it is output only; the Numpad piece sits at the top-right where the donor lock LEDs usually are (inference, unverified); a header suits donor boards with different LED colours and positions. The 470 Ohm value gives about 2 mA at 3.3 V with a 2 V LED (calculated; adjust for LED colour). The ScrLk key (position D85) becomes a plain no-LED switch; the rev0 `MX-LED` symbols are replaced by the no-LED symbol. Lock state reaches the firmware over I2C writes (not through the matrix). Reopen if: a donor keeps its LEDs on a different piece, or LEDs must be on-board.
+**D9. Lock indicators (Num, Caps, Scroll).** Three active-low outputs on the Numpad extender (GPA5 Num, GPA6 Caps, GPA7 Scroll) with a 470 Ohm series resistor each, brought to a 2.54 mm 1x04 header on the Numpad piece (pin 1 VCC for the LED anodes, pins 2 to 4 the three sink lines through the resistors). LEDs are off-board and wired by the builder. Rationale: an output driven low sinks the LED current (driven high, the LED is off because its anode is at VCC), and GPA7 may be used as it is output only; the Numpad piece sits at the top-right where the donor lock LEDs usually are (inference, unverified); a header suits donor boards with different LED colours and positions. The 470 Ohm value gives about 2 mA at 3.3 V with a 2 V LED (calculated; adjust for LED colour). The ScrLk key (position D85) becomes a plain no-LED switch; the rev0 `MX-LED` symbols are replaced by the no-LED symbol. Lock state reaches the firmware over I2C writes (not through the matrix). Reopen if: a donor keeps its LEDs on a different piece, or LEDs must be on-board.
 
 **D10. Alternate switch footprints on one position.** All alternate footprints of a position connect the same two nets: the position's column line and the position's anode node (switch pad to the single diode's anode). Footprints are wired in parallel, one diode per position, and the rev0 pad swaps in the 90-degree duplicates are kept (switch pads are interchangeable). The builder populates exactly one switch per position; populating two would act as one key and cause no ghosting. Reopen if: footprints with different electrical pad pairs are introduced.
 
 ## 4. Per-chip line counts
 
-Each chip's lines are its rows, columns and indicator outputs. Every chip must have at most 16 lines; the done check in the scratchpad recomputes this from the mapping in section 8, not from this table.
+Each chip's lines are its rows, columns and indicator outputs. Every chip must have at most 16 lines; the done check in the scratchpad recomputes this from the mapping in section 8, not from this table. U2 is retired (the reference is not reused).
 
-| chip | piece | positions | rows | columns | indicator lines | total lines | limit |
-|---|---|---|---|---|---|---|---|
-| U1 | F-row | 13 | 1 | 13 | 0 | 14 | 16 |
-| U2 | F-nav | 3 | 1 | 3 | 0 | 4 | 16 |
-| U3 | Main-L | 35 | 5 | 7 | 0 | 12 | 16 |
-| U4 | Main-R | 32 | 5 | 7 | 0 | 12 | 16 |
-| U5 | Nav | 10 | 4 | 3 | 0 | 7 | 16 |
-| U6 | Numpad | 18 | 5 | 4 | 3 | 12 | 16 |
-| total | | 111 | | | | | |
+| chip | piece | package | positions | rows | columns | indicator lines | total lines | limit |
+|---|---|---|---|---|---|---|---|---|
+| U1 | F-row | SSOP-28 | 13 | 1 | 13 | 0 | 14 | 16 |
+| U3 | Main-L | SOIC-28W | 35 | 5 | 7 | 0 | 12 | 16 |
+| U4 | Main-R | SOIC-28W | 32 | 5 | 7 | 0 | 12 | 16 |
+| U5 | Nav and F-nav | SOIC-28W | 13 | 5 | 3 | 0 | 8 | 16 |
+| U6 | Numpad | SOIC-28W | 18 | 5 | 4 | 3 | 12 | 16 |
+| total | | | 111 | | | | | |
 
-Pin assignment: rows on GPA0 upward and columns on GPB0 upward, except U1, whose 13 columns use GPB0 to GPB6 then GPA1 to GPA6 (row on GPA0). No column or other input uses GPA7 or GPB7 (output only, see D4); the only use of GPA7 is the Scroll indicator output. U6 indicators: GPA5, GPA6, GPA7 (Num, Caps, Scroll).
+Pin assignment: rows on GPA0 upward and columns on GPB0 upward, except U1, whose 13 columns use GPB0 to GPB6 then GPA1 to GPA6 (row on GPA0), and U5, whose fifth row (the F-nav keys) is GPA4 (rows GPA0 to GPA3 are rev0 R1, R2, R4, R5). No column or other input uses GPA7 or GPB7 (output only, see D4); the only use of GPA7 is the Scroll indicator output. U6 indicators: GPA5, GPA6, GPA7 (Num, Caps, Scroll). The F-nav keys (D81, D85, D90) are U5 row 4 on columns 0 to 2, shared with Nav columns C14 to C16.
 
-## 5. Seam connector and bus
+## 5. Bus and connectors
 
-One connector type everywhere: a 2x03 shrouded (boxed) pin header, 2.54 mm pitch, with a polarising notch, male on every piece (the MCU module end uses whatever connector the module has, wired to this pinout). Mating is a 6-way flat ribbon cable with female IDC sockets, wired 1:1 (pin n to pin n). The notch gives keying and prevents reversal. The 4 to 6 wire MCU cable uses the same pinout.
+Bus connector: a plain 1x04 pin header, 2.54 mm pitch (`Connector_PinHeader_2.54mm:PinHeader_1x04_P2.54mm_Vertical`), male on every piece, mated by a 4-wire cable with female housings, wired 1:1 (pin n to pin n). The MCU cable is the same four wires. The header is unkeyed; pin 1 is marked by a square pad and silkscreen (see the reversal hazard in section 9).
 
 | pin | signal | notes |
 |---|---|---|
-| 1 | VCC | logic supply from the controller module; 3.3 V recommended; 1.8 to 5.5 V on MCP23017 and MCP23018 (WEB, datasheets) |
+| 1 | VCC | logic supply from the controller module; 3.3 V recommended; 1.8 to 5.5 V (WEB, MCP23017 datasheet rev D) |
 | 2 | GND | |
 | 3 | SDA | I2C data; pull-up on the controller side only |
 | 4 | SCL | I2C clock; pull-up on the controller side only |
-| 5 | INT | wired-OR open-drain interrupt, each chip joins through a jumper that is open by default (D7); optional |
-| 6 | RSV | reserved, passed through all ports, connected to no chip in rev1 (candidate for RESET, D6) |
 
-Every piece carries three ports wired in parallel (pin n of port A = pin n of ports B and C), so a piece can join up to three neighbours or the controller. Topology (a tree, one cable per seam): controller to Main port C; Main port A to F-row; Main port B to Nav; Nav port A to F-nav; Nav port B to Numpad. Ports sit on the service strip (D8).
+INT and the reserved sixth wire of the earlier 2x03 connector are dropped (D7). The F-nav matrix header is a separate 1x04 (row, C14, C15, C16) and is not part of the bus (D3).
 
-Bus load. Six chips plus ribbon: the estimate uses about 10 pF per chip pin and about 50 to 100 pF per metre of ribbon (typical values, not measured), giving well under the 400 pF I2C limit for total cable under about 2 m; start at 400 kHz and fall back to 100 kHz if the run is longer. Scan cost estimate (assumptions: 400 kHz, about 7 bytes of traffic per row step, 9 clocks per byte): 21 row steps across all chips, about 63 clocks each, about 3.3 ms per full scan. Not measured. Both estimates are the author's arithmetic.
+Ports per piece. Ports on one piece are wired in parallel. The tree has four cables: controller to Main, Main to F-row, Main to Nav, Nav to Numpad. The minimum ports are therefore Main 3 (controller, F-row, Nav), Nav 2 (from Main, to Numpad), F-row 1, Numpad 1, F-nav 0 (it has no extender and no bus), plus one 1x04 F-nav matrix header on each of F-nav and Nav. No spare ports in this spec; the PCB worker may add one spare to Main or Nav only if the area exists. Rationale: port area is what overflowed the small pieces.
+
+Bus load. Five chips plus cable: the estimate uses about 10 pF per chip pin and about 50 to 100 pF per metre of cable (typical values, not measured), giving well under the 400 pF I2C limit for total cable under about 2 m; start at 400 kHz and fall back to 100 kHz if the run is longer. Scan cost estimate (assumptions: 400 kHz, about 7 bytes of traffic per row step, 9 clocks per byte): 21 row steps across all chips, about 63 clocks each, about 3.3 ms per full scan. Not measured. Both estimates are the author's arithmetic.
 
 ## 6. Address table
 
-Address is 0x20 plus (A2 A1 A0 as a binary number), 7-bit. Jumper: 0 = bridged to GND (default), 1 = bridged to VCC.
+Address is 0x20 plus (A2 A1 A0 as a binary number), 7-bit. Jumper: 0 = bridged to GND (default), 1 = bridged to VCC. U2's address 0x21 is freed by retiring U2; the other addresses are unchanged to avoid churn.
 
 | chip | piece | A2 | A1 | A0 | 7-bit address |
 |---|---|---|---|---|---|
 | U1 | F-row | 0 | 0 | 0 | 0x20 |
-| U2 | F-nav | 0 | 0 | 1 | 0x21 |
+| (U2 retired) | | 0 | 0 | 1 | 0x21 free |
 | U3 | Main-L | 0 | 1 | 0 | 0x22 |
 | U4 | Main-R | 0 | 1 | 1 | 0x23 |
-| U5 | Nav | 1 | 0 | 0 | 0x24 |
+| U5 | Nav and F-nav | 1 | 0 | 0 | 0x24 |
 | U6 | Numpad | 1 | 0 | 1 | 0x25 |
 | spare | | 1 | 1 | x | 0x26, 0x27 |
 
 ## 7. Firmware-facing notes
 
-Firmware drives each chip as an independent scan unit: for each local row, drive that row's pin low and set every other row of that chip to its deselect state (input or driven high, D4), read the column bank, and treat a low column bit as a closed key. Rows are GPA outputs (push-pull on the MCP23017, switched between output-low and input), columns are GPB inputs with GPPU enabled. The six local matrices are joined into one QMK layout in firmware; the mapping has no cross-chip row or column. The positions column uses rev0 diode references; `key_footprints` lists the rev0 switch footprint names on that position (alternatives separated by a vertical bar), with the rev0 prefix `MX_` removed. `rev0_col` and `rev0_row` are the rev0 column and row for traceability (rev0 R0 is the F-row), not electrical in rev1. The mapping below is the single definition of the matrix; every chip block starts with a `# chip=` line.
+Firmware drives each chip as an independent scan unit: for each local row, drive that row's pin low and set every other row of that chip to its deselect state (input or driven high, D4), read the column bank, and treat a low column bit as a closed key. Rows are GPA outputs (push-pull on the MCP23017, switched between output-low and input), columns are GPB inputs with GPPU enabled. The five chip-local matrices are joined into one QMK layout in firmware; the mapping has no cross-chip row or column. The positions column uses rev0 diode references; `key_footprints` lists the rev0 switch footprint names on that position (alternatives separated by a vertical bar), with the rev0 prefix `MX_` removed. `rev0_col` and `rev0_row` are the rev0 column and row for traceability (rev0 R0 is the F-row), not electrical in rev1. The mapping below is the single definition of the matrix; every chip block (U1, U3, U4, U5, U6; there is no U2) starts with a `# chip=` line.
 
 ## 8. Mapping: key to (extender, local row, local column)
 
@@ -111,16 +112,6 @@ D60,F22|F9,C10,R0,0,9,GPA0,GPA3
 D66,F10|F23,C11,R0,0,10,GPA0,GPA4
 D71,F11|F24,C12,R0,0,11,GPA0,GPA5
 D76,F12|F25,C13,R0,0,12,GPA0,GPA6
-```
-
-### U2, F-nav, address 0x21 (3 positions, 1 x 3)
-
-```csv
-# chip=U2
-position,key_footprints,rev0_col,rev0_row,local_row,local_col,row_pin,col_pin
-D81,PSCRN1|PSCRN2,C14,R0,0,0,GPA0,GPB0
-D85,SCRLK1|SCRLK2,C15,R0,0,1,GPA0,GPB1
-D90,PSBRK1|PSBRK2,C16,R0,0,2,GPA0,GPB2
 ```
 
 ### U3, Main-L, address 0x22 (35 positions, 5 x 7)
@@ -204,7 +195,7 @@ D59,MENU1|ROPT1,C9,R5,4,2,GPA4,GPB2
 D65,RCTRL1|RCTRL2,C10,R5,4,3,GPA4,GPB3
 ```
 
-### U5, Nav, address 0x24 (10 positions, 4 x 3)
+### U5, Nav and F-nav, address 0x24 (13 positions, 5 x 3; local row 4 is the F-nav piece)
 
 ```csv
 # chip=U5
@@ -219,6 +210,9 @@ D88,UP1,C15,R4,2,1,GPA2,GPB1
 D84,LEFT1,C14,R5,3,0,GPA3,GPB0
 D89,DOWN1,C15,R5,3,1,GPA3,GPB1
 D93,RGHT1,C16,R5,3,2,GPA3,GPB2
+D81,PSCRN1|PSCRN2,C14,R0,4,0,GPA4,GPB0
+D85,SCRLK1|SCRLK2,C15,R0,4,1,GPA4,GPB1
+D90,PSBRK1|PSBRK2,C16,R0,4,2,GPA4,GPB2
 ```
 
 ### U6, Numpad, address 0x25 (18 positions, 5 x 4)
@@ -248,12 +242,16 @@ D107,KPDOT1,C19,R5,4,2,GPA4,GPB2
 
 ## 9. Open items and reopen triggers
 
-- Closed: MCP23018 address pins and MCP23017/MCP23018 pin compatibility. Both resolved by the datasheet check (D4a): rev1 uses MCP23017, A0 to A2 as in section 6; the parts are not pin-compatible.
+- Closed: MCP23018 address pins and MCP23017/MCP23018 pin compatibility (D4a).
 - Diode drop against VIL (D4). Inference only: 1N4148 forward drop about 0.4 V at tens of uA plus row VOL must stay under 0.66 V at 3.3 V. Trigger: bench test on the first board; reopen D4a and D4 if it fails.
-- GPA7 and GPB7 output-only (D4). Taken from datasheet rev D; rev C does not state it, so it is treated as real for any silicon. Trigger: a datasheet or measurement showing these pins read as inputs on a part in hand (then the constraint can be relaxed).
-- Service strip clearance in donor cases (D8). Trigger: measure the first donor case.
+- GPA7 and GPB7 output-only (D4). Taken from datasheet rev D; rev C does not state it, so it is treated as real for any silicon. Trigger: a datasheet or measurement showing these pins read as inputs on a part in hand.
+- Back-side part height against donor cases (D8, D4b, D6) is unmeasured. Trigger: measure the first donor case; if it fails, reopen D4b.
+- Candidate placements (D8) come from a greedy study; the PCB worker must confirm each chip fits. Trigger: a layout check that fails.
+- SSOP-28 (0.65 mm pitch) on F-row is harder to hand-solder than SOIC. Trigger: builder feedback; fall back to SOIC-28W only if a spot is found.
+- Bus connector reversal (section 5): the 1x04 is unkeyed, and a reversed cable ties VCC to SCL and GND to SDA, which can damage a push-pull SCL driver on the MCU module. Mitigation: silkscreen pin 1, colour-coded cable, and optionally a polarised housing. Trigger: any wiring mistake in testing; then adopt a keyed connector.
+- F-nav keys depend on the F-nav matrix cable (D3). Trigger: a requirement that F-nav works alone.
+- Polling only (D7). Trigger: interrupt-driven scanning or wake-on-keypress is wanted.
 - Indicator location and LED electrical values (D9). Trigger: donor LED position or colour known.
-- INT use and RESET routing (D6, D7). Trigger: sleep, wake or recovery requirements from firmware.
 - Cable length and I2C speed (section 5): estimates only. Trigger: bench test with the intended cable run.
 - Alternate-footprint rows that physically sit in a different row than their electrical row (rev0: backspace, backslash and Enter cells) keep their rev0 electrical position; a donor needing a different layout is a firmware keymap change, not a hardware change, because every position is its own cell.
-- Not covered here: switch footprint cleanup, panel outline, silkscreen, case fit, BOM costing.
+- Not covered here: switch footprint cleanup, silkscreen, case fit, BOM costing.
