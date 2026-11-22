@@ -895,7 +895,7 @@ def main():
     ap.add_argument("--profile", choices=list(PROFILES), default="tidy")
     ap.add_argument("--classes", default="node,fnav,row,col", help="comma list of node,fnav,row,col")
     ap.add_argument("--no-fanout", action="store_true", help="skip connecting chip pins of row/column nets to their bus")
-    ap.add_argument("--no-fanout-first", action="store_true", help="route the buses first and fan the chip pins out afterwards (the old order, which cages pins)")
+    ap.add_argument("--fanout-first", action="store_true", help="opt in: route every chip pin stub before the buses (not a clear win, see TODO.md); the default routes the buses first and fans the chip pins out afterwards")
     ap.add_argument("--jobs", type=int, default=max(1, min(8, (os.cpu_count() or 2) - 1)))
     ap.add_argument("--swap-pref", action="store_true", help="horizontal preferred on F.Cu and vertical on B.Cu instead")
     ap.add_argument("--force", action="store_true", help="skip the KiCad-is-running check")
@@ -985,7 +985,7 @@ def main():
     pre = []
     fan_logs = []
     Ctx.fanout = not a.no_fanout
-    if not a.no_fanout and not a.no_fanout_first:
+    if not a.no_fanout and a.fanout_first:
         # fanout first: every chip pin gets its escape stub and every decoupling capacitor its link before any bus is routed
         for p in data["pads"]:
             if p["net"] and p["ref"].startswith("C") and p["ref"][1:].isdigit():

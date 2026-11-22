@@ -7,7 +7,7 @@ Stages (each reads and writes --board; every stage logs to DIR/<stage>.log and r
 Status: no stage has been verified as part of an end-to-end run; each tool was run by hand (tools/*.md). A stage that is
 not complete stops with exit code 2 and a message naming what is missing; it never calls a missing file.
   strip  implemented, not verified in a chain: remove every tagged item (52757465- grid router, 46726565- Freerouting, 474e4420- pours)
-  route  implemented, not verified in a chain: tools/route_regular.py (fanout first, not a clear win, see TODO.md)
+  route  implemented, not verified in a chain: tools/route_regular.py (buses first; --fanout-first is opt-in and not a clear win, see TODO.md)
   fill   implemented, not verified in a chain: Freerouting for what is left, merged as 46726565- copper (tools/FILL.md)
   pour   PARTIAL: gnd_pour.py and one KiCad fill run; the join of GND pads left alone in an island is NOT IMPLEMENTED and stops the stage (tools/GND.md)
   check  PARTIAL: needs tools/allowed_open.txt, which does not exist; stops before running anything (the board still has open nets, TODO.md)

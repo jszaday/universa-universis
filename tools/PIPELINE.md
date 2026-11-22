@@ -14,7 +14,7 @@ Run the stages with KiCad closed; the driver refuses to run otherwise. The route
 ## Stages
 
 1. `strip`: removes the tagged copper of all three tools (`52757465-` grid router, `46726565-` Freerouting, `474e4420-` pours and stitching vias). Nothing else is touched.
-2. `route`: `route_regular.py`. The script's default order is fanout first (chip pins routed before the buses); `--no-fanout-first` gives the old order (buses first). Fanout first is implemented but was not a clear win, and the committed board was not built with it (state and numbers: `TODO.md`).
+2. `route`: `route_regular.py`. The default order is buses first, then the chip pins; this is how the committed board was built. `--fanout-first` (chip pins routed before the buses) is opt-in: implemented, not a clear win (state and numbers: `TODO.md`). `pipeline.py` does not pass it.
 3. `fill`: Freerouting for the rest (power, I2C, LED). It never routes `*_GND` nets (poured) or nets that have a pad in `left_pads.txt`. Default flags, 12 minute limit, killed by process group and the stop asserted.
 4. `pour`: `gnd_pour.py` and one KiCad fill. Stops with exit code 2 at `TODO(pipeline-gnd-join)`: the step that joins GND pads left alone in a pour island is not written; run `gnd_pour.py --extra-vias` by hand (`tools/GND.md`).
 5. `check`: stops with exit code 2 at `TODO(pipeline-allowed-open)` because `tools/allowed_open.txt` does not exist. Once it exists: DRC with `--refill-zones --all-track-errors --schematic-parity`, `netcheck.py`, `shortdet.py` plus its negative control, `check_pipeline.py` (connectivity with zones counted as copper, zone-to-foreign-copper clearance, negative controls), `check_board.py` (outline and footprints unchanged, tidiness table).
