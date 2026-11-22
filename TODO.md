@@ -19,7 +19,6 @@ Open work for the rev. 1 (beta) revision. Priorities: P0 security, crash or data
 
 - LED carrier board: rev. 1 provides only a 4-pin header (power plus three active-low lock-LED lines; the series resistors are off-board in the LED harness, `docs/rev1-spec.md` D9); the carrier may be built on perfboard. Trigger: donor LED positions and colours are known.
 - Mounting holes are deliberately not added in rev. 1. Trigger: a case or mounting approach is chosen.
-- `fkb-109j-big/fkb-109j-big.kicad_prl` is tracked and rewritten on every KiCad open. Recommend untracking it and adding it to `.gitignore`. Trigger: next housekeeping commit.
 - The upstream mouse-bite footprint repository has no licence text; `umu.pretty/umu_mouse-bite-5mm-slot.kicad_mod` records its origin in its description. Trigger: settle before publishing.
 - Seven back-side diodes cannot share the common rotation (7 at 0 degrees, 2 at 180 degrees) because both pads had to stay put on the rev1 PCB branch. Cosmetic only.
 - Rev. 0 row and column legends (R1-R5, C0-C20) are to be removed from the PCB silkscreen; not yet done. Current behaviour: they remain and the diode silkscreen marks overlap them. Trigger: next silkscreen pass.
