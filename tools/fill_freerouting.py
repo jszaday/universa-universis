@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fill the nets the grid router left, with Freerouting, without touching the grid router's copper.
 
-  prep  BOARD DSN [NET ...]  export a Specctra DSN in which every net that is already one copper component is removed
+  prep  BOARD DSN [--left FILE] [NET ...]  (never routes *_GND nets or nets in the left-pads FILE) export a Specctra DSN in which every net that is already one copper component is removed
                         from the network (its pads, tracks and vias stay as obstacles) and the rest are routed
                         with the board's net class (0.25 mm track, 0.8/0.4 via, 0.2 mm clearance)
                         (NET ... are routed too even though they are one component: nets with a rule violation)
@@ -106,7 +106,16 @@ def link_pins(b, nets):
     return out
 
 
-def cmd_prep(board, dsn_out, extra=()):
+def excluded_nets(board, left_file):
+    """Nets Freerouting must never route: the ground pours (`*_GND`, joined by tools/gnd_pour.py) and every net with a pad
+    left on purpose (tools/left_pads.txt: far alternate footprints, the popout ring), whose open branch is deliberate."""
+    ex = set()
+    if left_file and os.path.exists(left_file):
+        ex |= {l.split("\t")[0] for l in open(left_file) if l.strip()}
+    return ex
+
+
+def cmd_prep(board, dsn_out, extra=(), left_file=None):
     import pcbnew
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import check_fill
@@ -116,7 +125,8 @@ def cmd_prep(board, dsn_out, extra=()):
     if not pcbnew.ExportSpecctraDSN(b, raw):
         raise SystemExit("fill_freerouting: pcbnew could not export the DSN from %s. Open the board in KiCad once to check it loads, then retry." % board)
     raw_text = open(raw).read()
-    keep = set(broken) | set(extra)
+    ex = excluded_nets(board, left_file)
+    keep = {n for n in set(broken) | set(extra) if n not in ex and not n.endswith("_GND")}
     out, kept = rewrite_dsn(raw_text, keep, link_pins(b, keep))
     open(dsn_out, "w").write(out)
     os.remove(raw)
@@ -227,7 +237,13 @@ def cmd_strip(board, out):
 def main():
     a = sys.argv[1:]
     if len(a) >= 3 and a[0] == "prep":
-        return cmd_prep(a[1], a[2], a[3:])
+        rest = a[3:]
+        left = None
+        if "--left" in rest:
+            k = rest.index("--left")
+            left = rest[k + 1]
+            rest = rest[:k] + rest[k + 2:]
+        return cmd_prep(a[1], a[2], rest, left)
     if len(a) >= 3 and a[0] == "bad-nets":
         return cmd_bad_nets(a[1], a[2])
     if len(a) >= 4 and a[0] == "drop-nets":

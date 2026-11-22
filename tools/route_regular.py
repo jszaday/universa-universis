@@ -24,7 +24,10 @@ import tempfile
 import time
 from array import array
 
-import numpy as np
+try:  # only the router's grid needs numpy; the check scripts import this module under `python3 -I`
+    import numpy as np
+except ImportError:  # pragma: no cover
+    np = None
 
 SQ2 = math.sqrt(2.0)
 ROUTER_UUID_PREFIX = "52757465-"  # ASCII "Rute": marks copper created by this script
@@ -187,6 +190,8 @@ class Grid:
     -1 nobody. own_v likewise for a via centre (blocks both layers). Cells are j*NX+i."""
 
     def __init__(self, bbox, rules, netids):
+        if np is None:
+            raise SystemExit("route_regular: numpy is not importable here. Run the router without -I (numpy is in the user site-packages) or install numpy for KiCad's Python.")
         self.r = rules
         self.x0 = math.floor((bbox[0] - 2.0) / G)
         self.y0 = math.floor((bbox[1] - 2.0) / G)
@@ -348,7 +353,7 @@ def build_tables(P):
     return nxt, step
 
 
-def astar(grid, net, srcs, goal_cells, goal_xy, win, P, cap):
+def astar(grid, net, srcs, goal_cells, goal_xy, win, P, cap, hmul=1.0):
     """srcs: iterable of (i,j,L). goal_cells: {(i,j): layer-bitmask}. Returns list of (i,j,L) or None."""
     NX = grid.NX
     ownt, ownv = grid.views
@@ -366,7 +371,7 @@ def astar(grid, net, srcs, goal_cells, goal_xy, win, P, cap):
         dx = abs(i - gx)
         dy = abs(j - gy)
         v = dx + dy - c2 * (dx if dx < dy else dy) - 1.5
-        return v if v > 0 else 0.0
+        return hmul * v if v > 0 else 0.0
 
     for (i, j, L) in srcs:
         k = ((j * NX + i) * 2 + L) * 9 + 8
@@ -500,6 +505,7 @@ class Ctx:
     pads_by_net = None
     netids = None
     fanout = False
+    stubbed = frozenset()  # (net, ref, pin) of chip pins that already have a fanout-first stub
 
 
 def pad_cells(grid, p, W):
@@ -580,7 +586,9 @@ def _route_attempt(grid, net, name, pads, cellsets, P, win, cap, anchor_cells, l
         todo.remove(k)
         goal = cellsets[k]
         goal_xy = (grid.ci(pads[k]["x"]), grid.cj(pads[k]["y"]))
-        path = astar(grid, net, sorted(tree), goal, goal_xy, win, P, cap)
+        # a fanout-first stub end is a chip pin's escape: reach it with the fanout costs, as the old fanout step did
+        Ph = PROFILES[Ctx.profile]["fan"] if pads[k].get("virt") else P
+        path = astar(grid, net, sorted(tree), goal, goal_xy, win, Ph, cap, FAN_HMUL if pads[k].get("virt") else 1.0)
         if path is None:
             log("  %s: no path to %s.%s within window/cap" % (name, pads[k]["ref"], pads[k]["num"]))
             return None
@@ -613,11 +621,24 @@ def run_cluster(args):
             anchor = task["anchor"]
         ts = time.time()
         res = route_net(grid, name, pads, P, rules, log, anchor_cells=anchor)
+        if res is None and task.get("stubs"):
+            # the stub ends are caged: fall back to the old order for this bus (bus first, chip pins fanned out last)
+            lines.append("%-6s %-22s stub ends unreachable, falling back to bus-then-fanout" % (cls, name))
+            plain = [p for p in pads if not p.get("virt")]
+            Ctx.stubbed = Ctx.stubbed - {(name, st["ref"], st["num"]) for st in task["stubs"]}
+            task = dict(task, stubs=None, pads=plain)
+            pads = plain
+            res = route_net(grid, name, pads, P, rules, log, anchor_cells=anchor)
         if res is None:
             out.append(dict(cls=cls, net=name, fan=task["fan"], ok=False, segs=[], vias=[]))
             lines.append("%-6s %-22s FAIL   %.1fs" % (cls, name, time.time() - ts))
             continue
         segs, vias, protect = res
+        stubs = task.get("stubs") or []
+        if stubs:  # fanout-first: the reserved chip-pin stubs belong to this bus (all or nothing)
+            protect = (set(protect) - {s["end"] for s in stubs}) | {s["start"] for s in stubs}
+            for s in stubs:
+                segs = segs + s["segs"]
         # protect every pad terminal so merging never removes a vertex at a pad
         segs, vias = merge_collinear(segs, vias, protect)
         nid = grid.netids[name]
@@ -632,6 +653,142 @@ def run_cluster(args):
         out += run_fanout(grid, rules, prof, out, Ctx.pads_by_net, lines)
     lines.append("cluster %d done in %.1fs" % (cid, time.time() - t0))
     return cid, out, lines
+
+
+# ----------------------------------------------------------------------------- fanout first
+FAN_HMUL = 1.5  # weighted A* for the long hop from a bus to a chip-pin stub end (bounded suboptimal, far fewer expansions)
+LANE = 0.0  # mm of reserved lane beyond each stub end (0 = off: 2.5 mm made the F-row columns fail more often)
+STUB_EXT = 1.0  # mm, stub end beyond the outer edge of the pad
+CAP_PADS = {}  # net -> pads of capacitors on it, filled by main()
+CAP_REACH = 6.0  # mm; a power pin links to a capacitor pad of its net this close (Manhattan)
+
+
+def _free_line(grid, net, L, cells):
+    own = grid.views[0][L]
+    return all(own[j * grid.NX + i] in (0, net) for (i, j) in cells)
+
+
+def _via_ok(grid, net, i, j):
+    base = j * grid.NX + i
+    ownt, ownv = grid.views
+    return all(ownv[L][base] in (0, net) for L in (0, 1)) and all(ownt[L][base] in (0, net) for L in (0, 1))
+
+
+def straight_stub(grid, net, p, axis, sign, via):
+    """A straight stub out of the pad field, perpendicular to the chip's pad rows. Returns a stub dict or None."""
+    L = 1 if p["bot"] else 0
+    i0, j0 = grid.ci(p["x"]), grid.cj(p["y"])
+    nid = grid.netids[net]
+    half = p["hw"] if axis == "x" else p["hh"]
+    for ext in (STUB_EXT, 0.8, 1.2, 1.5, 2.0, 0.6):
+        tgt = abs(half) + ext
+        n = int(math.ceil(tgt / G - 1e-9))
+        di, dj = (sign, 0) if axis == "x" else (0, sign)
+        cells = [(i0 + di * k, j0 + dj * k) for k in range(n + 1)]
+        if not _free_line(grid, nid, L, cells):
+            continue
+        ie, je = cells[-1]
+        if via and not _via_ok(grid, nid, ie, je):
+            continue
+        return dict(net=net, ref=p["ref"], num=p["num"], layer=L, start=(i0, j0), end=(ie, je), segs=[(L, i0, j0, ie, je)], vias=[(ie, je)] if via else [])
+    return None
+
+
+def reserve_lane(grid, st, axis, sign, w):
+    """Keep foreign copper out of the straight lane beyond a stub end (same layer, up to LANE mm), so a bus laid later
+    cannot cage the stub end. The cells stay free for the stub's own net; nothing is written to the board."""
+    L = st["layer"]
+    nid = grid.netids[st["net"]]
+    own = grid.views[0][L]
+    i, j = st["end"]
+    di, dj = (sign, 0) if axis == "x" else (0, sign)
+    n = 0
+    for k in range(1, int(LANE / G) + 1):
+        a, b = i + di * k, j + dj * k
+        if not (0 <= a < grid.NX and 0 <= b < grid.NY) or own[b * grid.NX + a] not in (0, nid):
+            break
+        n = k
+    if n:
+        grid.add_seg(st["net"], L, grid.cx(i), grid.cy(j), grid.cx(i + di * n), grid.cy(j + dj * n), w)
+
+
+def build_fanout(grid, rules, prof, chip_pads, sig_nets, log):
+    """Reserve an escape stub for every chip pin before any bus is routed.
+    Capacitor links first (a power pin to the nearest pad of its net on a decoupling capacitor), then a straight
+    stub per remaining pin. Pins of row/column nets in `sig_nets` get a stub that the bus later joins (returned in
+    `sig`: net -> [stub]); every other net's stubs are returned as finished results in `pre`. A GND stub ends in a
+    via so the pour on the other layer can take it. Everything is stamped into the grid as that net's copper."""
+    P = PROFILES[prof]["fan"]
+    by_ref = {}
+    for p in chip_pads:
+        by_ref.setdefault(p["ref"], []).append(p)
+    pre, sig, done = [], {}, set()
+    w = rules["width"]
+
+    def stamp(net, segs, vias):
+        for (L, a, b, c, d) in segs:
+            grid.add_seg(net, L, grid.cx(a), grid.cy(b), grid.cx(c), grid.cy(d), w)
+        for (a, b) in vias:
+            grid.add_via(net, grid.cx(a), grid.cy(b), rules["via_d"], rules["via_drill"])
+
+    for ref in sorted(by_ref):
+        pads = sorted(by_ref[ref], key=lambda p: (int(p["num"]) if p["num"].isdigit() else 0, p["num"]))
+        xs = [p["x"] for p in pads]
+        ys = [p["y"] for p in pads]
+        axis = "x" if (max(xs) - min(xs)) < (max(ys) - min(ys)) else "y"
+        mid = (min(xs) + max(xs)) / 2.0 if axis == "x" else (min(ys) + max(ys)) / 2.0
+        mine = [p for p in pads if p["net"] and not p["net"].startswith("unconnected-") and (p["net"] in sig_nets or classify_net(p["net"]) is None)]
+        # 1. decoupling links
+        links = {}
+        for p in mine:
+            if p["net"] in sig_nets:
+                continue
+            for c in CAP_PADS.get(p["net"], []):
+                d = abs(c["x"] - p["x"]) + abs(c["y"] - p["y"])
+                if d <= CAP_REACH and (c["ref"], c["num"]) not in done:
+                    k = (c["ref"], c["num"])
+                    if k not in links or d < links[k][0]:
+                        links[k] = (d, p, c)
+        for k in sorted(links):
+            d, p, c = links[k]
+            net = p["net"]
+            ls = []
+            res = route_net(grid, net, [p, c], P, rules, ls.append)
+            if res is None:
+                log("fanout: %s %s.%s -> %s.%s: no cap link (%s), plain stub instead" % (net, p["ref"], p["num"], c["ref"], c["num"], "; ".join(ls)))
+                continue
+            segs, vias, protect = res
+            segs, vias = merge_collinear(segs, vias, protect)
+            stamp(net, segs, vias)
+            pre.append(dict(cls=None, net=net, fan=True, ok=True, segs=segs, vias=vias))
+            done.add(k)
+            done.add((p["ref"], p["num"]))
+        # 2. straight stubs
+        for p in mine:
+            if (p["ref"], p["num"]) in done:
+                continue
+            sign = 1 if p[axis] > mid else -1
+            net = p["net"]
+            gnd = net.endswith("_GND")
+            st = straight_stub(grid, net, p, axis, sign, via=gnd) or (straight_stub(grid, net, p, axis, sign, via=False) if gnd else None)
+            if st is None:
+                log("fanout: %s %s.%s: no free straight stub, left to the later fanout/fill" % (net, p["ref"], p["num"]))
+                continue
+            stamp(net, st["segs"], st["vias"])
+            if not st["vias"]:
+                reserve_lane(grid, st, axis, sign, w)
+            Ctx.stubbed = Ctx.stubbed | {(net, p["ref"], p["num"])}
+            if net in sig_nets:
+                sig.setdefault(net, []).append(st)
+            else:
+                pre.append(dict(cls=None, net=net, fan=True, ok=True, segs=st["segs"], vias=st["vias"]))
+    return pre, sig
+
+
+def virtual_pad(grid, st):
+    i, j = st["end"]
+    return dict(ref=st["ref"], num=st["num"], net=st["net"], x=grid.cx(i), y=grid.cy(j), hw=0.05, hh=0.05, round=False,
+                top=st["layer"] == 0, bot=st["layer"] == 1, npth=False, hole=(0, 0), smd=False, virt=True, fp="", fx=0, fy=0)
 
 
 # ----------------------------------------------------------------------------- planning
@@ -738,6 +895,7 @@ def main():
     ap.add_argument("--profile", choices=list(PROFILES), default="tidy")
     ap.add_argument("--classes", default="node,fnav,row,col", help="comma list of node,fnav,row,col")
     ap.add_argument("--no-fanout", action="store_true", help="skip connecting chip pins of row/column nets to their bus")
+    ap.add_argument("--no-fanout-first", action="store_true", help="route the buses first and fan the chip pins out afterwards (the old order, which cages pins)")
     ap.add_argument("--jobs", type=int, default=max(1, min(8, (os.cpu_count() or 2) - 1)))
     ap.add_argument("--swap-pref", action="store_true", help="horizontal preferred on F.Cu and vertical on B.Cu instead")
     ap.add_argument("--force", action="store_true", help="skip the KiCad-is-running check")
@@ -824,18 +982,45 @@ def main():
         if len(bus) < 2:
             continue
         tasks_by_net[n] = dict(cls=c, net=n, pads=sorted(bus, key=lambda p: (p["x"], p["y"], p["ref"], p["num"])), fan=False)
+    pre = []
+    fan_logs = []
+    Ctx.fanout = not a.no_fanout
+    if not a.no_fanout and not a.no_fanout_first:
+        # fanout first: every chip pin gets its escape stub and every decoupling capacitor its link before any bus is routed
+        for p in data["pads"]:
+            if p["net"] and p["ref"].startswith("C") and p["ref"][1:].isdigit():
+                CAP_PADS.setdefault(p["net"], []).append(p)
+        sig_nets = {n for n, t in tasks_by_net.items() if t["cls"] in ("row", "col")}
+        t_fan = time.time()
+        chip_pads = [p for p in data["pads"] if is_chip(p["ref"]) and id(p) not in sacrificed]
+        pre, sig = build_fanout(grid, rules, a.profile, chip_pads, sig_nets, fan_logs.append)
+        for n, sts in sig.items():
+            t = tasks_by_net[n]
+            t["stubs"] = sts
+            t["pads"] = sorted(t["pads"] + [virtual_pad(grid, st) for st in sts], key=lambda p: (p["x"], p["y"], p["ref"], p["num"]))
+        print("fanout first: %d stub/link items for non-bus nets, %d bus nets with stubs, %d stubbed pins, %.1fs" % (
+            len(pre), len(sig), len(Ctx.stubbed), time.time() - t_fan), flush=True)
+        for l in fan_logs:
+            print("  " + l)
     # clusters share no copper interaction, so they route in parallel and merge in a fixed order
     pads_for_plan = {n: tasks_by_net[n]["pads"] + [p for p in pads_by_net[n] if is_chip(p["ref"])] for n in tasks_by_net}
     clusters = plan_clusters(pads_for_plan, netids, tasks_by_net)
     jobs = []
     for cid, grp in enumerate(clusters):
-        order = sorted(grp, key=lambda n: (CLASS_ORDER.index(tasks_by_net[n]["cls"]), hpwl(tasks_by_net[n]["pads"]), n))
+        # longest first within the row and column classes once chip stubs exist: a short bus laid first would cage the
+        # lanes the long ones need to leave the chip (planar nesting); diode and cable links stay shortest first
+        def okey(n):
+            t = tasks_by_net[n]
+            sgn = 1.0  # shortest first; longest-first for stubbed buses was tried and did not reduce failures
+            return (CLASS_ORDER.index(t["cls"]), sgn * hpwl(t["pads"]), n)
+
+        order = sorted(grp, key=okey)
         jobs.append((cid, [tasks_by_net[n] for n in order]))
     if a.swap_pref:
         for cl in PROFILES[a.profile].values():
             if cl["pref"]:
                 cl["pref"] = (cl["pref"][1], cl["pref"][0])
-    Ctx.grid, Ctx.rules, Ctx.profile, Ctx.fanout, Ctx.pads_by_net = grid, rules, a.profile, not a.no_fanout, pads_by_net
+    Ctx.grid, Ctx.rules, Ctx.profile, Ctx.pads_by_net = grid, rules, a.profile, pads_by_net
     print("route_regular: %d nets in %d clusters, profile %s, grid %dx%d" % (len(tasks_by_net), len(jobs), a.profile, grid.NX, grid.NY), flush=True)
 
     results_by_cid = {}
@@ -855,7 +1040,7 @@ def main():
     if nproc > 1:
         pool.close()
         pool.join()
-    results = [r for cid in sorted(results_by_cid) for r in results_by_cid[cid]]
+    results = pre + [r for cid in sorted(results_by_cid) for r in results_by_cid[cid]]
 
     body = emit_text(results, grid, rules, classes)
     tail = "\t(embedded_fonts no)\n)"
@@ -886,7 +1071,9 @@ def run_fanout(grid, rules, prof, results, pads_by_net, logs):
     for r in results:
         if not r["ok"] or r["cls"] not in ("row", "col"):
             continue
-        chips = [p for p in pads_by_net[r["net"]] if is_chip(p["ref"])]
+        chips = [p for p in pads_by_net[r["net"]] if is_chip(p["ref"]) and (r["net"], p["ref"], p["num"]) not in Ctx.stubbed]
+        if not chips:
+            continue
         tree = set()
         for (L, a, b, c, d) in r["segs"]:
             n = max(abs(c - a), abs(d - b))
