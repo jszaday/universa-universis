@@ -15,10 +15,11 @@
 // (chip, row pin, column pin) is independent of it. Every position has a unique
 // (rev0 row, rev0 col), checked by mx_validate. Cells with no switch are MX_NONE.
 //
-// U6 indicator outputs (Num, Caps, Scroll = GPA5, GPA6, GPA7) are not matrix lines:
+// U6 indicator outputs (Num, Caps, Scroll = GPB7, GPA2, GPA1) are not matrix lines:
 // the scanner sets them as outputs driven high (LED off, spec D9) and never changes
 // them. TODO(rev1-led): lock-state writes are not implemented; they must write only
-// OLAT bits 5-7 (OLATA 0x14) so the row OLAT bits (held at 0) stay untouched.
+// the indicator OLAT bits (OLATB 0x15 bit 7, OLATA 0x14 bits 1 and 2) so the row OLAT
+// bits (held at 0) stay untouched.
 //
 // Register facts, confirmed in the MCP23017 datasheet DS20001952D (Table 3-5, BANK=0):
 // IODIRA 0x00, IODIRB 0x01, GPPUA 0x0C, GPPUB 0x0D, GPIOA 0x12, GPIOB 0x13, OLATA
@@ -79,9 +80,9 @@ static const mx_pos_t mx_map_u6[5 * 4] = {
 };
 
 static const mx_chip_cfg_t mx_chips[MX_NUM_CHIPS] = {
-    {.addr = 0x20, .n_rows = 1, .n_cols = 13, .row_pins = {0}, .col_pins = {8, 9, 10, 11, 12, 13, 14, 1, 2, 3, 4, 5, 6}, .map = mx_map_u1},
-    {.addr = 0x22, .n_rows = 5, .n_cols = 7, .row_pins = {0, 1, 2, 3, 4}, .col_pins = {8, 9, 10, 11, 12, 13, 14}, .map = mx_map_u3},
-    {.addr = 0x23, .n_rows = 5, .n_cols = 7, .row_pins = {0, 1, 2, 3, 4}, .col_pins = {8, 9, 10, 11, 12, 13, 14}, .map = mx_map_u4},
-    {.addr = 0x24, .n_rows = 5, .n_cols = 3, .row_pins = {0, 1, 2, 3, 4}, .col_pins = {8, 9, 10}, .map = mx_map_u5},
-    {.addr = 0x25, .n_rows = 5, .n_cols = 4, .row_pins = {0, 1, 2, 3, 4}, .col_pins = {8, 9, 10, 11}, .ind_pins = {5, 6, 7}, .n_ind = 3, .map = mx_map_u6},
+    {.addr = 0x20, .n_rows = 1, .n_cols = 13, .row_pins = {14}, .col_pins = {0, 1, 2, 3, 4, 5, 6, 13, 12, 11, 10, 9, 8}, .map = mx_map_u1},
+    {.addr = 0x22, .n_rows = 5, .n_cols = 7, .row_pins = {2, 4, 7, 8, 10}, .col_pins = {0, 3, 5, 6, 9, 12, 11}, .map = mx_map_u3},
+    {.addr = 0x23, .n_rows = 5, .n_cols = 7, .row_pins = {13, 12, 4, 6, 7}, .col_pins = {14, 0, 2, 3, 1, 5, 11}, .map = mx_map_u4},
+    {.addr = 0x24, .n_rows = 5, .n_cols = 3, .row_pins = {0, 2, 7, 8, 15}, .col_pins = {14, 13, 1}, .map = mx_map_u5},
+    {.addr = 0x25, .n_rows = 5, .n_cols = 4, .row_pins = {3, 14, 11, 9, 8}, .col_pins = {10, 12, 13, 0}, .ind_pins = {15, 2, 1}, .n_ind = 3, .map = mx_map_u6},
 };
