@@ -28,7 +28,7 @@ Back:
 Unbuilt and untested: nothing in this revision has been fabricated or run on a real board yet.
 
 Design changes from the Alpha revision:
-- Each keyboard piece has its own I2C GPIO extender (MCP23017) and a local key matrix, and the pieces connect through a four-wire I2C bus connector instead of hand-wired jumpers.
+- Each keyboard piece except the F-nav piece has its own I2C GPIO extender (MCP23017) and a local key matrix, and the pieces connect through a four-wire I2C bus connector instead of hand-wired jumpers. The F-nav keys (PrtSc, ScrLk, Pause) reach the Nav piece's extender over a separate four-wire matrix cable (`docs/rev1-spec.md` D3).
 - Diodes are on the back side of the board.
 - The switches no longer carry the lock-LED defect.
 - KiCad symbol and footprint library tables are project-local.
