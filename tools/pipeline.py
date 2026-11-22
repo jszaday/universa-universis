@@ -3,12 +3,14 @@
 
   pipeline.py [--board PATH] [--work DIR] [--jar FREEROUTING_JAR] [--stages strip,route,fill,pour,check]
 
-Stages (each reads and writes --board; every stage logs to DIR/<stage>.log and records its exit code in DIR/<stage>.rc):
-  strip  remove every tagged item (52757465- grid router, 46726565- Freerouting, 474e4420- pours) and nothing else
-  route  tools/route_regular.py (fanout first)
-  fill   Freerouting for what is left (never GND nets or deliberately left nets), merged as 46726565- copper
-  pour   tools/gnd_pour.py zones and stitching vias, KiCad fill, island vias, then a short track or via for each GND pad still alone
-  check  DRC, netcheck, shortdet, zone clearance, connectivity, same-as-base and the negative controls
+Stages (each reads and writes --board; every stage logs to DIR/<stage>.log and records its exit code in DIR/<stage>.rc).
+Status: no stage has been verified as part of an end-to-end run; each tool was run by hand (tools/*.md). A stage that is
+not complete stops with exit code 2 and a message naming what is missing; it never calls a missing file.
+  strip  implemented, not verified in a chain: remove every tagged item (52757465- grid router, 46726565- Freerouting, 474e4420- pours)
+  route  implemented, not verified in a chain: tools/route_regular.py (fanout first, not a clear win, see TODO.md)
+  fill   implemented, not verified in a chain: Freerouting for what is left, merged as 46726565- copper (tools/FILL.md)
+  pour   PARTIAL: gnd_pour.py and one KiCad fill run; the join of GND pads left alone in an island is NOT IMPLEMENTED and stops the stage (tools/GND.md)
+  check  PARTIAL: needs tools/allowed_open.txt, which does not exist; stops before running anything (the board still has open nets, TODO.md)
 
 Run it with KiCad's Python (pcbnew) and with KiCad closed. numpy must be importable (the router needs it).
 """
@@ -29,6 +31,12 @@ JAVA = "/Library/Java/JavaVirtualMachines/temurin-25.jdk/Contents/Home/bin/java"
 FREEROUTING_LIMIT_S = 12 * 60
 PY = sys.executable
 GND_PREFIX = "474e4420-"
+
+
+def not_implemented(stage, what, action):
+    """Stop loudly (exit code 2): the caller must not read a silent skip as a pass."""
+    print("pipeline: stage %s is not implemented: %s. Action: %s" % (stage, what, action), file=sys.stderr, flush=True)
+    raise SystemExit(2)
 
 
 def run(cmd, log, rc_file, limit=None, ok=(0,)):
@@ -107,36 +115,33 @@ def stage_pour(a, w):
     cmd = [PY, gp, "--board", a.board, "--solid-pth", solid]
     if run(cmd, os.path.join(w, "pour.log"), os.path.join(w, "pour.rc")):
         return 1
-    extra = os.path.join(w, "extra_vias.txt")
-    open(extra, "w").write("")
-    for rnd in range(4):
-        # fill (the saved board then holds the filled polygons) and look for split pours
-        if run([KICAD_CLI, "pcb", "drc", "--refill-zones", "--save-board", "--schematic-parity", "-o", os.path.join(w, "pour_drc.json"), a.board],
-               os.path.join(w, "pour_fill%d.log" % rnd), os.path.join(w, "pour_fill%d.rc" % rnd)) not in (0, 5):
-            return 1
-        more = os.path.join(w, "extra_vias_%d.txt" % rnd)
-        if run([PY, os.path.join(HERE, "gnd_pad_join.py"), a.board, more, os.path.join(HERE, "left_pads.txt")],
-               os.path.join(w, "pour_join%d.log" % rnd), os.path.join(w, "pour_join%d.rc" % rnd)):
-            return 1
-        if not open(more).read().strip():
-            break
-        with open(extra, "a") as f:
-            f.write(open(more).read())
-        if run(cmd + ["--extra-items", extra], os.path.join(w, "pour_again%d.log" % rnd), os.path.join(w, "pour_again%d.rc" % rnd)):
-            return 1
-    return 0
+    if run([KICAD_CLI, "pcb", "drc", "--refill-zones", "--save-board", "--schematic-parity", "-o", os.path.join(w, "pour_drc.json"), a.board],
+           os.path.join(w, "pour_fill.log"), os.path.join(w, "pour_fill.rc")) not in (0, 5):
+        return 1
+    # TODO(pipeline-gnd-join): the step that finds GND pads left alone in a small B.Cu island after the fill and adds a
+    # short track or via for each (U4.10, U4.17, U1.10, C1.2, J14.2) is not written. Current behaviour: the pour and the
+    # fill above have run, the board holds those islands, and this stage stops with exit code 2. Rerun gnd_pour.py with
+    # --extra-vias by hand (tools/GND.md) until a join script exists.
+    not_implemented("pour", "joining GND pads left alone in a pour island (no gnd_pad_join.py exists)",
+                    "run tools/gnd_pour.py --extra-vias by hand, see tools/GND.md")
 
 
 def stage_check(a, w):
     left = os.path.join(HERE, "left_pads.txt")
     main_pcb = a.main
+    allowed = os.path.join(HERE, "allowed_open.txt")
+    if not os.path.exists(allowed):
+        # TODO(pipeline-allowed-open): the list of deliberately open nets for the connectivity check was never written.
+        # Current behaviour: this stage stops here with exit code 2 and runs no check.
+        not_implemented("check", "tools/allowed_open.txt (the deliberately open nets) does not exist",
+                        "run the checks by hand (tools/PIPELINE.md, Division of labour); then write the list")
     bad = 0
     bad |= bool(drc(a.board, os.path.join(w, "drc.json"), os.path.join(w, "drc.log"), os.path.join(w, "drc.rc"), ("--refill-zones",)) not in (0, 5))
     bad |= bool(run([PY, "-I", os.path.join(HERE, "netcheck.py"), a.board], os.path.join(w, "netcheck.log"), os.path.join(w, "netcheck.rc")))
     bad |= bool(run([PY, "-I", os.path.join(HERE, "shortdet.py"), a.board], os.path.join(w, "shortdet.log"), os.path.join(w, "shortdet.rc")))
     bad |= bool(run([PY, "-I", os.path.join(HERE, "shortdet.py"), "--selftest", a.board], os.path.join(w, "shortdet_self.log"), os.path.join(w, "shortdet_self.rc")))
     bad |= bool(run([PY, "-I", os.path.join(HERE, "check_pipeline.py"), "zone-clearance", a.board], os.path.join(w, "zone.log"), os.path.join(w, "zone.rc")))
-    bad |= bool(run([PY, "-I", os.path.join(HERE, "check_pipeline.py"), "connectivity", a.board, left, os.path.join(HERE, "allowed_open.txt")], os.path.join(w, "conn.log"), os.path.join(w, "conn.rc")))
+    bad |= bool(run([PY, "-I", os.path.join(HERE, "check_pipeline.py"), "connectivity", a.board, left, allowed], os.path.join(w, "conn.log"), os.path.join(w, "conn.rc")))
     bad |= bool(run([PY, "-I", os.path.join(HERE, "check_pipeline.py"), "selftest", a.board, left], os.path.join(w, "check_self.log"), os.path.join(w, "check_self.rc")))
     bad |= bool(run([PY, "-I", os.path.join(HERE, "check_board.py"), "same-as-base", main_pcb, a.board], os.path.join(w, "same.log"), os.path.join(w, "same.rc")))
     bad |= bool(run([PY, "-I", os.path.join(HERE, "check_board.py"), "selftest", a.board, main_pcb, left], os.path.join(w, "board_self.log"), os.path.join(w, "board_self.rc")))
