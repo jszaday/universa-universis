@@ -14,11 +14,12 @@ Guide for working on the Universa Universis keyboard-retrofit PCB (KiCad project
 ## Gates (run before accepting any PCB or schematic change)
 
 1. ERC strict: `kicad-cli sch erc --severity-all --exit-code-violations`. Expect 0 violations.
-2. DRC with `--schematic-parity --exit-code-violations`. Expect 0 parity items. Unconnected items are expected until routing is finished (two floating popout pads are intentional); anything else is a regression.
-3. Outline: the Edge.Cuts set must be identical to rev0. Margins are minimal by design, so the board must not grow. Compare against the rev0 commit with a script, not by eye, and show the script can fail.
-4. Counts: the switch and diode footprint counts are unchanged from the base commit, all diodes sit on B.Cu in one orientation, and the board's pads match the schematic netlist with 0 mismatches. Derive the numbers from the base commit, not from this file.
-5. Popout: compare the final board with itself before and after a change. Comparing against rev0 is invalid, because rev0 has no perforation ring.
-6. Firmware: `make -C firmware test` (checks the pin table against the spec's CSV blocks) and `make -C firmware mutants` (the tests must kill every mutant).
+2. DRC with `--refill-zones --all-track-errors --schematic-parity --severity-all --exit-code-violations`. Expect 0 parity items and 0 of clearance, shorting_items, tracks_crossing, copper_edge_clearance, courtyards_overlap, hole_clearance, hole_to_hole, solder_mask_bridge, track_dangling, via_dangling, track_width, isolated_copper. Silkscreen and library-footprint warnings are standing. Unconnected items are expected only for nets listed in `TODO.md` and the deliberately unwired alternate footprints; anything else is a regression. Without `--all-track-errors` DRC reports only the first error per track.
+3. Short checks beyond DRC. KiCad rewrites an item's net from the copper it touches when it loads a board, so DRC cannot see a short that a script writes into the file as text. Also run `tools/netcheck.py <pcb>` (nets as written in the file against nets after load; exit 1 on any mismatch) and `tools/shortdet.py <pcb>` (geometric different-net overlap on loaded shapes; it does not test zone fills, so check zone fills against foreign-net copper separately). Run the Python tools with the KiCad interpreter and `-I`. Each check needs a negative control that fails.
+4. Outline: the Edge.Cuts set must be identical to rev0. Margins are minimal by design, so the board must not grow. Compare against the rev0 commit with a script, not by eye, and show the script can fail.
+5. Counts: the switch and diode footprint counts are unchanged from the base commit, every footprint keeps its position, angle and layer (pad-level property changes are listed separately), and the board's pads match the schematic netlist with 0 mismatches. Diodes are on B.Cu but not in one orientation (a few sit at 0 or 180 degrees; cosmetic). Derive the numbers from the base commit, not from this file.
+6. Popout: compare the final board with itself before and after a change. Comparing against rev0 is invalid, because rev0 has no perforation ring.
+7. Firmware: `make -C firmware test` (checks the pin table against the spec's CSV blocks) and `make -C firmware mutants` (the tests must kill every mutant).
 
 Have a fresh agent run these, with only the artifact and the criteria. Don't hand it the author's conclusions.
 
@@ -27,11 +28,11 @@ Have a fresh agent run these, with only the artifact and the criteria. Don't han
 - Keep the breakaway panel: pieces F-row, F-nav, Main, Nav, Numpad. The main deployment cuts every seam, so no hand-wired jumpers across seams, and each piece except F-nav works alone.
 - Each piece has its own MCP23017 extender where it needs one (Main has two), on a 4-wire I2C bus (VCC, GND, SDA, SCL on a 1x04 2.54 mm header). All chips are one part and one footprint, SOIC-28W. Addresses are hardwired per chip; there are no address jumpers. Decoupling is one 100 nF 0805 per chip and nothing else.
 - Bus headers sit on the back along the edge nearest the neighbouring piece, never in the interior.
-- SMD parts sit on the back inside the original outline. Through-hole diodes (1N4148, DO-35) are also on the back, one orientation.
+- SMD parts sit on the back inside the original outline. Through-hole diodes (1N4148, DO-35) are also on the back, with the cathode on the row side.
 - Rows are driven low one at a time and unselected rows are high-Z. Columns use pull-ups. GPA7/GPB7 are output-only.
 - The popout circle (r = 5.5 mm, near the AT101 blank) is a perforation ring. MX_MENU1, MX_ROPT1 and MX_RWIN2 are sacrificed on purpose.
-- Routing plan: a script lays the regular nets (diode-to-switch links, row and column buses) as long deterministic tracks; Freerouting is tried on the remainder (chip fanout, power); the owner tidies by hand.
-- Not done yet, and deliberately: the ISO Enter offset (owner is checking the physical board), the numpad plus/Enter rotation, the LED carrier board, donor labels. All are in `TODO.md`. Don't create the `rev1-beta` tag until the owner answers the ISO Enter question.
+- Routing, as built: `tools/route_regular.py` lays the diode links, F-nav nets, rows and columns as deterministic tracks (tagged uuid prefix `52757465-`); `tools/fill_freerouting.py` lets Freerouting (v2.5.0, Java 25, default flags) route what is left, with the script's nets removed from the DSN network (tagged `46726565-`); `tools/gnd_pour.py` adds per-piece GND pours with stitching vias. Marking wires `fix` in the DSN does not stop Freerouting rerouting them, so exclude nets instead. The remaining open nets are finished by hand in KiCad (`TODO.md`). A fanout-first router mode exists but was not a clear win.
+- Not done yet, and deliberately: the ISO Enter offset (owner is checking the physical board), the numpad plus/Enter rotation, the LED carrier board. Donor labels are out of scope for rev1 (rev2). All are in `TODO.md`. Don't create the `rev1-beta` tag until the owner answers the ISO Enter question.
 
 ## How the work was run
 
