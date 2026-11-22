@@ -1,6 +1,6 @@
 # Routing pipeline
 
-`pipeline.py` rebuilds every script-made copper item in order and checks it. Status of each stage is stated here as of this commit; a stage marked NOT DONE has code but was not run to a clean result.
+`pipeline.py` rebuilds every script-made copper item in order and checks it. The help text of `pipeline.py` lists which stages are implemented. No stage has been verified as part of an end-to-end run. A stage that is incomplete stops with exit code 2 and names what is missing.
 
 ```
 PY=/Applications/KiCad/KiCad.app/Contents/Frameworks/Python.framework/Versions/3.9/bin/python3
@@ -14,10 +14,10 @@ Run the stages with KiCad closed; the driver refuses to run otherwise. The route
 ## Stages
 
 1. `strip`: removes the tagged copper of all three tools (`52757465-` grid router, `46726565-` Freerouting, `474e4420-` pours and stitching vias). Nothing else is touched.
-2. `route`: `route_regular.py`. Fanout first: before any bus is laid, every chip pin gets a straight stub out of the pad field (1 mm beyond the pad edge, perpendicular to the pad rows), power pins next to a decoupling capacitor get a link to it, and GND stubs end in a via. Row and column stubs become terminals of their bus (all or nothing: a failed bus leaves no stub). If a bus cannot reach its stub ends, that bus falls back to the old order (bus first, chip pins afterwards). `--no-fanout-first` restores the old order for everything.
+2. `route`: `route_regular.py`. The script's default order is fanout first (chip pins routed before the buses); `--no-fanout-first` gives the old order (buses first). Fanout first is implemented but was not a clear win, and the committed board was not built with it (state and numbers: `TODO.md`).
 3. `fill`: Freerouting for the rest (power, I2C, LED). It never routes `*_GND` nets (poured) or nets that have a pad in `left_pads.txt`. Default flags, 12 minute limit, killed by process group and the stop asserted.
-4. `pour`: `gnd_pour.py`, a KiCad fill, island vias. NOT DONE: the step that joins GND pads left alone in a small B.Cu island (U4.10, U4.17, U1.10, C1.2, J14.2) is not written; the driver references a `gnd_pad_join.py` that does not exist yet.
-5. `check`: DRC with `--refill-zones --all-track-errors --schematic-parity`, `netcheck.py`, `shortdet.py` plus its negative control, `check_pipeline.py` (connectivity with zones counted as copper, zone-to-foreign-copper clearance, negative controls), `check_board.py` (outline and footprints unchanged, tidiness table).
+4. `pour`: `gnd_pour.py` and one KiCad fill. Stops with exit code 2 at `TODO(pipeline-gnd-join)`: the step that joins GND pads left alone in a pour island is not written; run `gnd_pour.py --extra-vias` by hand (`tools/GND.md`).
+5. `check`: stops with exit code 2 at `TODO(pipeline-allowed-open)` because `tools/allowed_open.txt` does not exist. Once it exists: DRC with `--refill-zones --all-track-errors --schematic-parity`, `netcheck.py`, `shortdet.py` plus its negative control, `check_pipeline.py` (connectivity with zones counted as copper, zone-to-foreign-copper clearance, negative controls), `check_board.py` (outline and footprints unchanged, tidiness table).
 
 ## Division of labour between the checks
 
