@@ -172,8 +172,8 @@ static void test_validate(void) {
     bad[1].col_pins[6] = GPA(7);
     CHECK(mx_validate(bad, MX_NUM_CHIPS, MX_LOGICAL_ROWS, MX_LOGICAL_COLS) != 0, "column on GPA7 must be rejected");
     memcpy(bad, mx_chips, sizeof bad);
-    bad[1].row_pins[4] = GPA(7); // GPA7 as a row is allowed
-    CHECK(mx_validate(bad, MX_NUM_CHIPS, MX_LOGICAL_ROWS, MX_LOGICAL_COLS) == 0, "row on GPA7 must be accepted");
+    bad[1].row_pins[4] = GPB(7); // GPB7 as a row is allowed (the real table already has U3 row 2 on GPA7)
+    CHECK(mx_validate(bad, MX_NUM_CHIPS, MX_LOGICAL_ROWS, MX_LOGICAL_COLS) == 0, "row on GPB7 must be accepted");
     memcpy(bad, mx_chips, sizeof bad);
     bad[4].ind_pins[0] = bad[4].col_pins[0]; // indicator on a column pin
     CHECK(mx_validate(bad, MX_NUM_CHIPS, MX_LOGICAL_ROWS, MX_LOGICAL_COLS) != 0, "indicator overlapping a column must be rejected");
@@ -218,7 +218,7 @@ static void test_rows_high_z_during_scan(void) {
     all_present(&f);
     mx_state_t s;
     start(&f, &s);
-    press(&f, 0x22, GPA(0), GPB(1));
+    press(&f, 0x22, GPA(2), GPA(3));
     mx_row_t m[MX_LOGICAL_ROWS];
     for (int i = 0; i < 50; i++) mx_scan(&s, m);
     CHECK(f.row_high_drives == 0, "a row was driven high %d times: unselected rows must be high-Z", f.row_high_drives);
@@ -236,13 +236,13 @@ static void test_keys_at_logical_positions(void) {
     CHECK(!mx_scan(&s, m) && count_keys(m) == 0, "idle matrix is empty and unchanged");
 
     // Expectations are hand-derived from the spec CSV rows, not read from the table.
-    press(&f, 0x20, GPA(0), GPB(0)); // D1   ESC          -> (0,0)
-    press(&f, 0x20, GPA(0), GPA(5)); // D71  F11          -> (0,12)  (column on port A)
-    press(&f, 0x22, GPA(0), GPB(1)); // D7   1            -> (1,1)
-    press(&f, 0x23, GPA(0), GPB(0)); // D43  7            -> (1,7)
-    press(&f, 0x24, GPA(4), GPB(1)); // D85  ScrLk (F-nav row 4) -> (0,15)
-    press(&f, 0x24, GPA(2), GPB(1)); // D88  Up           -> (4,15)
-    press(&f, 0x25, GPA(4), GPB(2)); // D107 KP.          -> (5,19)
+    press(&f, 0x20, GPB(6), GPA(0)); // D1   ESC          -> (0,0)
+    press(&f, 0x20, GPB(6), GPB(1)); // D71  F11          -> (0,12)
+    press(&f, 0x22, GPA(2), GPA(3)); // D7   1            -> (1,1)
+    press(&f, 0x23, GPB(5), GPB(6)); // D43  7            -> (1,7)
+    press(&f, 0x24, GPB(7), GPB(5)); // D85  ScrLk (F-nav row 4) -> (0,15)
+    press(&f, 0x24, GPA(7), GPB(5)); // D88  Up           -> (4,15)
+    press(&f, 0x25, GPB(0), GPB(5)); // D107 KP.          -> (5,19)
     CHECK(mx_scan(&s, m), "first press reports a change");
     CHECK(count_keys(m) == 7, "exactly 7 keys, got %d", count_keys(m));
     CHECK(key(m, 0, 0), "D1 -> (0,0)");
@@ -263,8 +263,8 @@ static void test_missing_chip(void) {
     mx_state_t s;
     start(&f, &s);
     CHECK(mx_chips_up(&s) == MX_NUM_CHIPS - 1, "all but the Nav chip up");
-    press(&f, 0x22, GPA(0), GPB(1));
-    press(&f, 0x24, GPA(4), GPB(1)); // key on the absent chip must never appear
+    press(&f, 0x22, GPA(2), GPA(3));
+    press(&f, 0x24, GPB(7), GPB(5)); // key on the absent chip must never appear
     mx_row_t m[MX_LOGICAL_ROWS];
     mx_scan(&s, m);
     CHECK(count_keys(m) == 1 && key(m, 1, 1), "present chips work, absent chip gives no keys");
@@ -282,7 +282,7 @@ static void test_missing_chip(void) {
     mx_scan(&s, m);
     CHECK(count_keys(m) == 2 && key(m, 0, 15), "keys of the revived chip appear");
     const mx_chip_cfg_t *c = chip_by_addr(0x24);
-    CHECK(c && (u16(f.chip[0x24 - 0x20].gppu) & 0x0700) == 0x0700, "revived chip was reconfigured (columns pulled up)");
+    CHECK(c && (u16(f.chip[0x24 - 0x20].gppu) & 0x6002) == 0x6002, "revived chip was reconfigured (columns pulled up)");
 }
 
 static void test_chip_dies_midrun(void) {
@@ -291,8 +291,8 @@ static void test_chip_dies_midrun(void) {
     all_present(&f);
     mx_state_t s;
     start(&f, &s);
-    press(&f, 0x22, GPA(0), GPB(1));
-    press(&f, 0x23, GPA(0), GPB(0));
+    press(&f, 0x22, GPA(2), GPA(3));
+    press(&f, 0x23, GPB(5), GPB(6));
     mx_row_t m[MX_LOGICAL_ROWS];
     mx_scan(&s, m);
     CHECK(count_keys(m) == 2, "both keys seen");
@@ -382,12 +382,12 @@ static void test_matches_spec(void) {
         for (int k = 0; k < mx_chips[i].n_rows * mx_chips[i].n_cols; k++) cells += mx_chips[i].map[k].row != MX_POS_NONE;
     CHECK(entries > 100 && entries == cells, "config has %d positions, spec CSV has %d: they must match", cells, entries);
 
-    // Negative control: corrupt one spec entry (D81 row pin GPA4 -> GPA3); the checker must notice.
-    char *d81 = strstr(text, "D81,PSCRN1|PSCRN2,C14,R0,4,0,GPA4,GPB0");
+    // Negative control: corrupt one spec entry (D81 row pin GPB7 -> GPB6); the checker must notice.
+    char *d81 = strstr(text, "D81,PSCRN1|PSCRN2,C14,R0,4,0,GPB7,GPB6");
     CHECK(d81 != 0, "D81 row not found in spec: update this negative control to an existing entry");
     if (d81) {
-        char *pin = strstr(d81, "GPA4");
-        pin[3] = '3';
+        char *pin = strstr(d81, "GPB7");
+        pin[3] = '6';
         int e2;
         quiet = 1;
         int mutated_bad = check_spec(text, &e2);

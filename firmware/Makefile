@@ -28,7 +28,7 @@ mutants:
 	    rowcol_swap) file=mcp23017_matrix.c; e='s/c->map\[r \* c->n_cols + k\]/c->map[k * c->n_rows + r]/';; \
 	    rows_driven_high) file=mcp23017_matrix.c; e='s/uint16_t olat = (uint16_t)~pin_mask(c->row_pins, c->n_rows);/uint16_t olat = 0xFFFF;/; s/dir \&= (uint16_t)~((uint16_t)1 << c->row_pins\[active_row\]);/dir \&= (uint16_t)~pin_mask(c->row_pins, c->n_rows);/';; \
 	    row_pullups) file=mcp23017_matrix.c; e='s/uint16_t cols = pin_mask(c->col_pins, c->n_cols);/uint16_t cols = pin_mask(c->col_pins, c->n_cols) | pin_mask(c->row_pins, c->n_rows);/';; \
-	    cfg_row_pin) file=matrix_config.h; e='/addr = 0x24/s/row_pins = {0, 1, 2, 3, 4}/row_pins = {0, 1, 2, 3, 5}/';; \
+	    cfg_row_pin) file=matrix_config.h; e='/addr = 0x24/s/row_pins = {0, 2, 7, 8, 15}/row_pins = {0, 2, 7, 8, 12}/';; \
 	  esac; \
 	  mkdir -p $(BUILD)/$$m; cp mcp23017_matrix.h mcp23017_matrix.c matrix_config.h test_matrix.c $(BUILD)/$$m/; \
 	  sed -i.bak "$$e" $(BUILD)/$$m/$$file; \
